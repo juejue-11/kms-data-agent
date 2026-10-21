@@ -11,7 +11,7 @@ const __dirname = fileURLToPath(new URL(".", import.meta.url));
 
 app.use(cors());
 app.use(express.json());
-// 同时托管前端，启动后直接访问 http://localhost:9100
+// 同时托管前端（含 vendor 下的浏览器端第三方库），启动后直接访问 http://localhost:9100
 app.use(express.static(join(__dirname, "web-ui")));
 
 app.post("/api/chat", async (req, res) => {

@@ -26,6 +26,11 @@ agent/
 ├── server.js           # Express 后端：检索 → 拼 prompt → agent 生成 → 附出处
 ├── rag/retrieve.js     # RAG 检索抽象层（知识库检索 + 联网搜索）
 ├── web-ui/             # 前端聊天界面
+│   ├── index.html      # 页面骨架
+│   ├── css/style.css   # 主题与 Markdown 排版
+│   ├── js/script.js    # 对话交互
+│   ├── js/markdown.js  # Markdown 渲染（token → DOM）
+│   └── vendor/         # 浏览器端第三方库（marked）
 ├── packages/...        # Pi 框架（fork 自 earendil-works/pi，MIT）
 ├── .env.example        # 配置模板（复制成 .env 后填写）
 └── README.md           # 本文件
