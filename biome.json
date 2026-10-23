@@ -25,6 +25,12 @@
 	},
 	"files": {
 		"includes": [
+			"app/**/*.ts",
+			"test/**/*.ts",
+			"rag/**/*.js",
+			"rag/**/*.d.ts",
+			"server.js",
+			"cli.js",
 			"scripts/model-catalog-protocol.ts",
 			"scripts/model-catalog-protocol.test.ts",
 			"packages/*/src/**/*.ts",
@@ -32,7 +38,7 @@
 			"packages/coding-agent/examples/**/*.ts",
 			"packages/agent/examples/**/*.ts",
 			"web-ui/**/*.js",
-			"!web-ui/vendor/**",
+			"!web-ui/vendor",
 			"!**/node_modules/**/*",
 			"!**/test-sessions.ts",
 			"!**/models.generated.ts",

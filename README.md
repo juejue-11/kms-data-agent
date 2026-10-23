@@ -1,105 +1,81 @@
-# PCB-agent —— PCB 缺陷分析助手
+# PCB Agent
 
-面向 PCB 生产制造的企业级 AI 助手。第一版实现**对话 + 缺陷定位**：用户描述异常现象，AI 从知识库检索并定位缺陷类型（标准名称），标注出处；知识库未命中时自动联网搜索兜底（网络结果单独标注）。
+基于仓库内 Pi 源码的 PCB 质量与工艺分析助手。Pi 负责模型、对话历史、活动分支、工具、压缩和重试；应用层负责访客归属、检索策略、请求生命周期和证据展示。网页和 CLI 连接同一 HTTP 服务。
 
-## 架构
+需求对应、验证结果和现场验收边界见 [Pi 复用实施与验收记录](PI_REUSE_IMPLEMENTATION.md)。
 
-```
-本地（agent）                        服务器
-┌────────────────────────┐          ┌─────────────────────────┐
-│ agent (node server.js) │  HTTP    │ RAGFlow                  │
-│  └─ rag/retrieve.js ───┼─────────>│  └─ Ollama embedding      │
-│     (接口隔离，可换)     │          │  知识库（资料库 + 缺陷说明）│
-└────────────────────────┘          └─────────────────────────┘
-   浏览器 http://localhost:9100
-```
+## 启动
 
-- **agent**：本仓库（Pi 框架 fork + 前端 + RAG 检索代码）
-- **RAGFlow**：开源 RAG 引擎（Apache 2.0），单独部署在服务器上，做语义检索
-- **Ollama**：本地 embedding 模型服务
-- **接口隔离**：`rag/retrieve.js` 的 `searchKnowledgeBase()` 是唯一接口，以后想换 RAG 后端（Milvus/Qdrant/自研）只改这一个函数
+开发验证版本为 Node.js 24.14.1。需要原生 TypeScript 与同步解析钩子，依赖、生成模型数据与平台原生组件须匹配当前仓库版本。
 
-## 目录结构（本仓库）
-
-```
-agent/
-├── server.js           # Express 后端：检索 → 拼 prompt → agent 生成 → 附出处
-├── rag/retrieve.js     # RAG 检索抽象层（知识库检索 + 联网搜索）
-├── web-ui/             # 前端聊天界面
-│   ├── index.html      # 页面骨架
-│   ├── css/style.css   # 主题与 Markdown 排版
-│   ├── js/script.js    # 对话交互
-│   ├── js/markdown.js  # Markdown 渲染（token → DOM）
-│   └── vendor/         # 浏览器端第三方库（marked）
-├── packages/...        # Pi 框架（fork 自 earendil-works/pi，MIT）
-├── .env.example        # 配置模板（复制成 .env 后填写）
-└── README.md           # 本文件
+```powershell
+npm ci --ignore-scripts
+Copy-Item .env.example .env
+npm run start:pcb
+# 另一个终端
+npm run cli:pcb
 ```
 
-> 说明：甲方资料（`.doc`/`.xlsx`）和解析后的数据**不在本仓库**（涉密，不公开）；RAGFlow 引擎源码也不在本仓库（单独部署在服务器）。
+浏览器访问 `http://127.0.0.1:9100`，也可用 `./start.ps1`。Ctrl+C 会取消并等待活动请求、释放实例和数据目录锁。原 `stop.ps1` 强制终止进程；异常退出后的未确认请求恢复为 interrupted。
 
-## 工作原理（缺陷定位）
+手动入口必须预加载源码解析器，服务启动会断言工作区包解析到 src，禁止回落旧 dist：
 
-```
-用户输入异常描述
-   ↓
-① 知识库检索  searchKnowledgeBase()
-   ├─ 命中（RAGFlow 语义检索）→ 相似度≥0.35 过滤后取 top2 + 出处
-   └─ 未命中 → ② 联网搜索 webSearch()（标注「网络来源」）
-   ↓
-③ 组装 prompt（角色 + 参考资料 + 出处 + 用户问题）
-   ↓
-④ Pi agent 生成回答
-   ↓
-⑤ 返回 { reply, sources }，前端展示回答 + 出处标注
+```powershell
+node --import ./packages/coding-agent/src/experimental/source-resolver.ts --env-file-if-exists=.env server.js
+node --import ./packages/coding-agent/src/experimental/source-resolver.ts --env-file-if-exists=.env cli.js
 ```
 
-「同一个意思不同说法」的识别靠 RAGFlow 的向量语义相似度（embedding）。检索时先按相似度阈值（0.35）过滤无关片段，再取 top2，避免无关资料混入。
+## 配置与数据
 
-## 快速开始
+业务配置见 [.env.example](.env.example)。相对路径相对仓库根目录；工作目录默认位于专用数据目录，不加载开发 AGENTS、个人 skills 或无关扩展。只托管 `web-ui/`。
 
-### 1. 安装依赖并构建（只需一次）
+模型、思考级别、compaction 与 retry 统一使用 `.pi-agent/settings.json`，认证使用 `.pi-agent/auth.json`，自定义模型使用 `.pi-agent/models.json`，格式沿用 [Pi 设置](packages/coding-agent/docs/settings.md) 与 [模型配置](packages/coding-agent/docs/models.md)。网页和 CLI 不单独接收模型凭据。
 
-```bash
-npm install --ignore-scripts
-npm run build
+Pi JSONL 保存在 `.pcb-data/owners/<opaque-owner>/sessions/<sessionId>/pi/`。metadata 和 requests 只存归属、正文哈希、状态和条目关联，不复制聊天正文。首次用户消息前 Pi 文件可以不存在；实例闲置回收后历史保留。缺失或损坏的非空历史会明确报错。
+
+同一数据目录只允许一个服务进程，`service.lock` 防止多个写入者。遗留锁仅在确认原进程已退出时处理，损坏锁须人工检查。备份时同时保留 JSONL、索引和 identity-secret。访客由服务端签发的 HttpOnly、SameSite Cookie 隔离，签名密钥跨重启稳定。CLI 保存服务端 Cookie，不允许自报其他用户身份。凭据丢失后仅凭旧会话 ID 不能恢复权限。公网部署应通过 HTTPS 反向代理和已验证账号身份接入；当前实现为独立访客模式。
+
+## 工具与证据
+
+默认只注册 `search_knowledge_base`、`search_web`、`get_evidence`，没有编码工具。Pi 结合完整会话生成检索词，工具结果由 Pi 保存。知识库正常无结果才可联网；故障后联网需额外打开 `PCB_ALLOW_WEB_ON_KB_ERROR`。外网与本地降级默认关闭。本地关键词匹配明确标为 local/degraded，不称为语义检索。指定 Tavily 却无密钥时明确报配置错误。
+
+工具按模型输出顺序串行执行，执行处校验知识库前置条件；本轮已有内部证据后，后续空结果不能绕过限制。每次尝试占用调用预算，超额或超时由监督器取消，不在工具回调内等待自身结束。
+
+回答使用 `[E:ev_xxx]`。证据正文和元数据只保存在 Pi 工具结果中，引用须属于当前活动分支；未知 ID 标为 invalid，没有引用为 not_applicable。引用存在不代表结论已被专业验证。仅展示真实取得的页码、文档和 HTTP/HTTPS 链接。压缩后 get_evidence 可取回原文。
+
+PCB 压缩扩展直接调用 Pi 原生 compact，传入 `resources/pcb/compaction.md`，复用 preparation、split-turn、摘要重试与历史持久化。Pi 扩展处理器会捕获异常，因此摘要失败时显式取消压缩，报告中断并保留原始历史，禁止再回落执行通用摘要。没有修改 Pi 核心，没有第二套摘要或消息存储。
+
+## HTTP 与客户端
+
+| 方法和路径 | 行为 |
+|---|---|
+| POST /api/sessions | 新建本人会话 |
+| GET /api/sessions | 分页列出本人会话 |
+| GET /api/sessions/:id | 状态和 activeRequestId |
+| GET /api/sessions/:id/messages?before=&limit= | 从 Pi 活动分支投影历史 |
+| POST /api/sessions/:id/messages | 提交 `{requestId,message}`，Accept 为 JSON 或 text/event-stream |
+| GET /api/sessions/:id/requests/:requestId | 查询运行和终态 |
+| POST /api/sessions/:id/requests/:requestId/cancel | 幂等停止指定请求 |
+
+requestId 为客户端 UUID。同 ID 同内容不再执行模型，运行中返回 202 JSON，终态返回既有结果；同 ID 不同内容返回 409。新请求遇到运行会话返回 SESSION_BUSY，服务并发上限返回 SERVICE_BUSY。客户端检查实际 Content-Type，断流后查询，不自动重发。
+
+事件格式为 `{sessionId,requestId,sequence,type,payload}`。增量仅临时展示，最终消息覆盖增量；等待 prompt 与 waitForIdle 并检查 stopReason，不能以 agent_end 当作业务成功。断流默认继续执行；显式停止、超时或退出才取消。慢客户端缓冲有上限，关闭流后仍可查询终态。
+
+## 记忆与验证
+
+`PCB_MEMORY_ENABLED=true` 才注册业务记忆工具。记忆单独保存，按 owner、适用范围、有效时间和确认状态过滤，保留来源会话与条目。用户可查看、更正、删除；旧版本不再作为当前事实检索，不自动把所有聊天变成事实。删除记忆不改写原始会话。
+
+```powershell
+npm run check:pcb
+npm run test:pcb
+npm run eval:pcb
+npm run check
 ```
 
-### 2. 配置环境变量
+自动测试不读取真实 .env、不调用线上 RAGFlow 或计费模型。集成测试复用 Pi faux provider，经过真实会话与 HTTP 适配。`test/evals/` 与 `test/fixtures/` 分别维护评分器与脱敏标注，区分检索和最终判定、判据、候选及追问。离线样例通过率不代表真实模型准确率；须测量真实业务基线后再制定发布门槛。
 
-```bash
-cp .env.example .env    # 然后编辑 .env，填 RAGFlow 地址 / API Key / dataset id
-```
+## 模块职责
 
-### 3. 部署 RAGFlow（需要 Docker，建议 Linux 服务器）
+`app/agent` 编排请求，`app/sessions` 管理归属及实例，`app/runtime` 集中接入 Pi，`app/tools` 注册业务扩展，`rag` 仅适配检索，`app/evidence` 投影引用，`app/http` 提供身份和传输，`app/cli` 为 HTTP 客户端，`app/memory` 保存可选事实。Pi 核心不反向导入应用层。PCB 提示位于 `resources/pcb/`，业务测试位于 `test/`。
 
-RAGFlow 官方推荐 Linux 服务器（≥4 核 / ≥16GB 内存）。部署后建知识库、上传资料，生成 API Key 和 dataset id，填回 `.env`。
-
-> 不部署 RAGFlow 也能跑通对话链路（走本地文本匹配 + 联网搜索），只是检索效果不如向量语义检索。
-
-### 4. 启动
-
-```bash
-node --env-file=.env server.js
-# 浏览器打开 http://localhost:9100
-```
-
-## 环境变量（.env）
-
-| 变量 | 说明 | 默认 |
-|------|------|------|
-| `PORT` | 后端端口 | 9100 |
-| `RAGFLOW_BASE_URL` | RAGFlow API 地址 | http://localhost:80 |
-| `RAGFLOW_API_KEY` | RAGFlow API Key | 空 |
-| `RAGFLOW_DATASET_IDS` | 知识库 dataset id，逗号分隔；留空走本地匹配 | 空 |
-| `SEARCH_PROVIDER` | 联网搜索：`tavily` / `duckduckgo` | duckduckgo |
-| `TAVILY_API_KEY` | Tavily Key（推荐，搜索质量更好） | 空 |
-
-## 已知问题
-
-- `packages/ai/src/providers/opencode-go.ts` 曾因上游模型目录漂移导致编译失败，已手动补了 `google-generative-ai` 类型。若以后 `git pull` 更新 Pi 后构建报这个错，检查该文件是否被覆盖。
-- 本地文本匹配兜底（`searchLocal`）是关键词匹配，语义能力弱，仅用于无 RAGFlow 时的临时兜底。
-
-## License
-
-本项目基于 [Pi](https://github.com/earendil-works/pi)（MIT）构建。
+本项目基于 [Pi](https://github.com/earendil-works/pi)（MIT）。客户原始资料和真实会话不提交。

@@ -1,5 +1,5 @@
-import { readdirSync } from "node:fs";
-import { join, relative, resolve } from "node:path";
+import { existsSync, readdirSync } from "node:fs";
+import { dirname, join, relative, resolve } from "node:path";
 import { SyntaxKind } from "typescript/unstable/ast";
 import {
 	isCallExpression,
@@ -69,6 +69,8 @@ try {
 
 		function checkSpecifier(node) {
 			if (!isRelativeJavaScriptSpecifier(node.text)) return;
+			// PCB 检索适配器保留真实 JavaScript 实现，仅在配有类型声明时允许这一处导入。
+			if (resolve(dirname(file), node.text) === resolve("rag/retrieve.js") && existsSync("rag/retrieve.d.ts")) return;
 			const { line, character } = sourceFile.getLineAndCharacterOfPosition(node.getStart(sourceFile));
 			failures.push(`${relative(".", file)}:${line + 1}:${character + 1}: ${node.text}`);
 		}

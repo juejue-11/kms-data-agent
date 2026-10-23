@@ -16,6 +16,7 @@ packages/ai/src/providers/.model-generation-*/
 .env
 # 本地 agent 运行数据（start.ps1 通过 PI_CODING_AGENT_DIR 指向此处）
 .pi-agent/
+.pcb-data/
 
 # Editor files
 .vscode/

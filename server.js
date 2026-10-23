@@ -1,32 +1,19 @@
-// server.js
-import express from "express";
-import cors from "cors";
-import { join } from "node:path";
-import { fileURLToPath } from "node:url";
-import { askPCB } from "./rag/ask.js";
+// 服务入口仅负责启动与退出信号，业务装配集中在 app/bootstrap.ts。
+import { bootstrap } from "./app/bootstrap.ts";
 
-const app = express();
-const PORT = process.env.PORT || 9100;
-const __dirname = fileURLToPath(new URL(".", import.meta.url));
-
-app.use(cors());
-app.use(express.json());
-// 同时托管前端（含 vendor 下的浏览器端第三方库），启动后直接访问 http://localhost:9100
-app.use(express.static(join(__dirname, "web-ui")));
-
-app.post("/api/chat", async (req, res) => {
-  const { message } = req.body;
-  if (!message) return res.status(400).json({ error: "消息不能为空" });
-
-  try {
-    const { reply, sources, usedWeb } = await askPCB(message);
-    res.json({ reply, sources, usedWeb });
-  } catch (error) {
-    console.error("[chat] Agent 处理出错:", error);
-    res.status(500).json({ error: "Agent 处理失败，请查看后端日志" });
-  }
-});
-
-app.listen(PORT, "0.0.0.0", () => {
-  console.log(`后端服务已启动: http://0.0.0.0:${PORT}`);
-});
+try {
+	const application = await bootstrap();
+	const address = application.server.address();
+	console.log(`PCB 服务已启动：http://${address.address}:${address.port}`);
+	const stop = () => {
+		// 取消活动请求并释放数据目录锁；失败通过进程退出码反馈。
+		void application.close().catch(() => {
+			process.exitCode = 1;
+		});
+	};
+	process.once("SIGINT", stop);
+	process.once("SIGTERM", stop);
+} catch (error) {
+	console.error(`PCB 启动失败：${error instanceof Error ? error.message : "未知错误"}`);
+	process.exitCode = 1;
+}

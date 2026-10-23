@@ -11,4 +11,4 @@ $env:PI_CODING_AGENT_DIR = Join-Path $PSScriptRoot ".pi-agent"
 # 切到脚本所在目录，保证 .env 与 Pi 的资源加载（process.cwd()）都以项目根为准
 Set-Location -LiteralPath $PSScriptRoot
 
-node --env-file=.env server.js
+node --import ./packages/coding-agent/src/experimental/source-resolver.ts --env-file-if-exists=.env server.js

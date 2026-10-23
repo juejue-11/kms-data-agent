@@ -33,37 +33,46 @@
                 </div>
             </div>
 
-            <nav class="nav">
+            <nav class="nav" aria-label="功能">
                 <div class="nav-label">功能</div>
-                <a class="nav-item active" href="#">
+                <button id="new-session-btn" class="nav-item nav-button" type="button">
                     <svg viewBox="0 0 20 20" width="18" height="18" aria-hidden="true">
-                        <path d="M3 4h14v8H8l-5 4z" fill="currentColor"/>
+                        <path d="M10 3v14M3 10h14" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
                     </svg>
-                    <span>缺陷定位</span>
-                </a>
+                    <span>新建对话</span>
+                </button>
+                <!-- 列表由服务端返回的本人会话生成，切换时从 Pi 历史恢复消息。 -->
+                <div class="session-heading">
+                    <span>我的会话</span>
+                    <button id="refresh-sessions-btn" class="icon-button" type="button" aria-label="刷新会话列表" title="刷新">↻</button>
+                </div>
+                <div id="session-list" class="session-list" role="listbox" aria-label="会话列表"></div>
             </nav>
 
             <div class="sidebar-foot">
                 <div class="status">
-                    <span class="status-dot"></span>
+                    <span id="connection-dot" class="status-dot"></span>
                     <div class="status-text">
-                        <div class="status-title">知识库已接入</div>
-                        <div class="status-desc">RAGFlow 语义检索</div>
+                        <div id="connection-title" class="status-title">正在连接服务</div>
+                        <div id="connection-desc" class="status-desc">会话状态加载中</div>
                     </div>
                 </div>
-                <div class="version">内部工具 · v1.0</div>
+                <div class="version">内部工具 · 会话版</div>
             </div>
         </aside>
 
         <!-- 主区 -->
         <main class="main">
             <header class="topbar">
-                <div class="topbar-title">缺陷定位对话</div>
+                <div>
+                    <div id="session-title" class="topbar-title">缺陷定位对话</div>
+                    <div id="run-status" class="run-status" aria-live="polite"></div>
+                </div>
                 <div class="topbar-sub">依据知识库与联网检索结果作答，并标注出处</div>
             </header>
 
             <div id="chat-box" class="chat-box">
-                <div class="message ai-message">
+                <div id="welcome-message" class="message ai-message">
                     <div class="avatar ai">助</div>
                     <div class="bubble">
                         <div class="msg-text">你好，我是 PCB 缺陷分析助手。请描述你遇到的异常现象（例如「线路上有开路/短路」「焊盘有绿油残留」），我会帮你定位缺陷类型并标注判定依据。</div>
@@ -73,12 +82,16 @@
 
             <div class="input-area">
                 <textarea id="user-input" rows="1" placeholder="描述异常现象，Enter 发送，Shift+Enter 换行"></textarea>
-                <button id="send-btn">发送</button>
+                <!-- 仅在存在当前请求时显示；停止动作通过请求 ID 定位，不影响其他会话。 -->
+                <button id="stop-btn" class="stop-btn" type="button" hidden>停止</button>
+                <button id="send-btn" type="button">发送</button>
             </div>
         </main>
     </div>
     <script src="vendor/marked.umd.js"></script>
     <script src="js/markdown.js"></script>
+    <!-- 先加载 HTTP/SSE 客户端，再初始化页面控制器；Markdown 渲染器独立复用。 -->
+    <script src="js/client.js"></script>
     <script src="js/script.js"></script>
 </body>
 </html>

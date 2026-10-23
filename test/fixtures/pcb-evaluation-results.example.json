@@ -1,0 +1,82 @@
+{
+  "sample": true,
+  "results": [
+  {
+    "caseId": "alias-solder-mask-pad-exposure",
+    "retrieval": { "status": "ok", "hits": [{ "evidenceId": "ev_alias_solder_mask", "label": "solder-mask-exposure" }] },
+    "answer": {
+      "predictedDefect": "solder-mask-exposure",
+      "criteria": ["pad copper is exposed", "solder-mask coverage is missing"],
+      "conclusionType": "conclusive"
+    }
+  },
+  {
+    "caseId": "similar-line-whitening-vs-open",
+    "retrieval": { "status": "ok", "hits": [{ "evidenceId": "ev_similar_line_whitening", "label": "line-whitening" }] },
+    "answer": {
+      "predictedDefect": "line-whitening",
+      "candidates": ["line-whitening"],
+      "criteria": ["continuity remains intact"],
+      "conclusionType": "conclusive"
+    }
+  },
+  {
+    "caseId": "contradictory-line-width-parameters",
+    "retrieval": { "status": "ok", "hits": [{ "evidenceId": "ev_contradictory_line_width", "label": "line-width-out-of-tolerance" }] },
+    "answer": {
+      "predictedDefect": "line-width-out-of-tolerance",
+      "criteria": ["compare measured width with the controlled drawing"],
+      "followUpQuestions": ["confirm the controlled drawing revision"],
+      "asked": true,
+      "conclusionType": "ask"
+    }
+  },
+  {
+    "caseId": "multi-turn-board-scratch",
+    "retrieval": { "status": "ok", "hits": [{ "evidenceId": "ev_multi_turn_board_scratch", "label": "board-scratch" }] },
+    "answer": {
+      "predictedDefect": "board-scratch",
+      "criteria": ["scratch depth", "whether copper is exposed"],
+      "followUpQuestions": ["whether copper is exposed"],
+      "asked": true,
+      "conclusionType": "ask"
+    }
+  },
+  {
+    "caseId": "no-hit-insufficient-description",
+    "retrieval": { "status": "no_results", "hits": [] },
+    "answer": {
+      "followUpQuestions": ["please describe the location and appearance"],
+      "asked": true,
+      "refused": true,
+      "conclusionType": "ask"
+    }
+  },
+  {
+    "caseId": "web-conflict-with-internal-record",
+    "retrieval": {
+      "status": "ok",
+      "hits": [
+        { "evidenceId": "ev_conflict_internal", "label": "immersion-gold-discoloration", "sourceType": "knowledge_base" },
+        { "evidenceId": "ev_conflict_web", "label": "web-oxidation-note", "sourceType": "web" }
+      ]
+    },
+    "answer": {
+      "followUpQuestions": ["confirm the applicable process specification"],
+      "asked": true,
+      "refused": true,
+      "conflictAcknowledged": true,
+      "conclusionType": "conflict"
+    }
+  },
+  {
+    "caseId": "compaction-retains-defect-context",
+    "retrieval": { "status": "ok", "hits": [{ "evidenceId": "ev_compaction_board_scratch", "label": "board-scratch" }] },
+    "answer": {
+      "predictedDefect": "board-scratch",
+      "criteria": ["scratch depth", "whether copper is exposed"],
+      "conclusionType": "conclusive"
+    }
+  }
+  ]
+}

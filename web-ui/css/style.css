@@ -75,6 +75,66 @@ body {
 }
 .nav-item.active svg { color: var(--gold-500); }
 
+/* 新建按钮保持侧栏底色，避免浏览器默认按钮背景降低文字对比度。 */
+.nav-button {
+    width: 100%;
+    border: 0;
+    background: transparent;
+    font-family: inherit;
+    cursor: pointer;
+    text-align: left;
+}
+.session-heading {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin: 25px 8px 8px 12px;
+    color: rgba(255, 255, 255, 0.4);
+    font-size: 11px;
+    letter-spacing: 2px;
+}
+.icon-button {
+    border: 0;
+    background: transparent;
+    color: rgba(255, 255, 255, 0.55);
+    cursor: pointer;
+    font-size: 17px;
+    line-height: 1;
+    padding: 2px 5px;
+}
+.icon-button:hover { color: var(--gold-400); }
+/* 会话列表独立滚动，长历史列表不挤占底部连接状态。 */
+.session-list {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+    max-height: min(48vh, 420px);
+    overflow-y: auto;
+    padding-right: 2px;
+}
+.session-list::-webkit-scrollbar { width: 5px; }
+.session-list::-webkit-scrollbar-thumb { background: rgba(255, 255, 255, 0.2); border-radius: 3px; }
+.session-empty { padding: 8px 12px; color: rgba(255, 255, 255, 0.35); font-size: 12px; line-height: 1.5; }
+.session-item {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+    width: 100%;
+    border: 0;
+    border-radius: 7px;
+    padding: 8px 10px;
+    background: transparent;
+    color: rgba(255, 255, 255, 0.72);
+    cursor: pointer;
+    font-family: inherit;
+    text-align: left;
+}
+.session-item:hover { background: rgba(255, 255, 255, 0.06); color: #fff; }
+.session-item.active { background: rgba(199, 164, 92, 0.15); color: #fff; }
+.session-item-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12.5px; }
+.session-item-meta { color: rgba(255, 255, 255, 0.38); font-size: 10.5px; }
+.session-item-status { color: var(--gold-400); }
+
 .sidebar-foot { border-top: 1px solid rgba(255, 255, 255, 0.1); padding-top: 16px; }
 .status { display: flex; align-items: center; gap: 10px; padding: 0 6px; }
 .status-dot {
@@ -85,6 +145,8 @@ body {
     box-shadow: 0 0 0 3px rgba(60, 179, 113, 0.18);
     flex-shrink: 0;
 }
+.status-dot[data-state="offline"] { background: #C56A6A; box-shadow: 0 0 0 3px rgba(197, 106, 106, 0.18); }
+.status-dot[data-state="connected"] { background: #3CB371; box-shadow: 0 0 0 3px rgba(60, 179, 113, 0.18); }
 .status-title { font-size: 13px; }
 .status-desc { font-size: 12px; color: rgba(255, 255, 255, 0.45); margin-top: 2px; }
 .version { font-size: 11px; color: rgba(255, 255, 255, 0.35); margin-top: 14px; padding: 0 6px; }
@@ -92,9 +154,11 @@ body {
 /* ===== 主区 ===== */
 .main { flex: 1; min-width: 0; display: flex; flex-direction: column; background: var(--bg); }
 
-.topbar { padding: 18px 28px; background: var(--surface); border-bottom: 1px solid var(--line); }
+.topbar { display: flex; align-items: center; justify-content: space-between; gap: 20px; padding: 18px 28px; background: var(--surface); border-bottom: 1px solid var(--line); }
 .topbar-title { font-size: 18px; font-weight: 600; }
 .topbar-sub { font-size: 13px; color: var(--muted); margin-top: 4px; }
+.run-status { min-height: 16px; margin-top: 4px; color: var(--muted); font-size: 12px; }
+.run-status.error { color: #A33A3A; }
 
 .chat-box {
     flex: 1;
@@ -147,6 +211,8 @@ body {
     border: 1px solid var(--line);
     border-top-left-radius: 4px;
 }
+/* 取消或中断后的部分内容保留显示，并附加未完成标记。 */
+.message-status { margin: 6px 3px 0; color: #A33A3A; font-size: 11.5px; }
 
 /* ===== Markdown 正文 ===== */
 /* 渲染后的内容由块级元素控制换行，关闭 pre-wrap 避免源码换行被放大 */
@@ -279,8 +345,15 @@ body {
     margin-right: 8px;
     vertical-align: 1px;
 }
+/* 来源颜色区分内部知识库、本地降级和联网资料，引用异常另行提示。 */
 .badge.kb { background: #E7F2EC; color: #1F7A4D; }
+.badge.local { background: #EEF0F4; color: #566273; }
 .badge.web { background: #FBF0DC; color: #A8721B; }
+.badge.unknown { background: #F0EDF7; color: #6F5B96; }
+.src-location { color: var(--muted-light); font-size: 11px; }
+.src-id { color: var(--muted-light); font-family: var(--font-mono); font-size: 10.5px; }
+.src-link { margin-left: 8px; font-size: 11px; }
+.citation-warning { margin-top: 5px; color: #A33A3A; font-size: 11.5px; }
 
 /* 打字中 */
 .typing {
@@ -341,6 +414,19 @@ body {
 }
 #send-btn:hover { background: var(--gold-400); }
 #send-btn:disabled { background: #E4E9F0; color: #9AA7B5; cursor: not-allowed; }
+/* 停止按钮与发送按钮区分，等待取消响应时由页面设置禁用状态。 */
+.stop-btn {
+    padding: 0 17px;
+    border: 1px solid #D9A0A0;
+    border-radius: 10px;
+    background: #FFF7F7;
+    color: #A33A3A;
+    cursor: pointer;
+    font-size: 14px;
+    font-weight: 600;
+}
+.stop-btn:hover { background: #FCECEC; }
+.stop-btn:disabled { cursor: not-allowed; opacity: 0.55; }
 
 /* ===== 响应式 ===== */
 @media (max-width: 720px) {
@@ -349,4 +435,6 @@ body {
     .chat-box { padding: 18px 14px; }
     .input-area { padding: 12px 14px; }
     .message { max-width: 92%; }
+    .topbar { align-items: flex-start; flex-direction: column; gap: 4px; }
+    .topbar-sub { text-align: left; }
 }
