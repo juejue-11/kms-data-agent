@@ -5,7 +5,7 @@
 $ErrorActionPreference = "Stop"
 
 # 从 .env 读取端口（读不到时回退默认 9100）
-$port = 9100
+$port = 9101
 $envFile = Join-Path $PSScriptRoot ".env"
 if (Test-Path $envFile) {
   $line = Get-Content $envFile | Where-Object { $_ -match '^\s*PORT\s*=' } | Select-Object -First 1

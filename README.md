@@ -41,8 +41,6 @@ Pi JSONL 保存在 `.pcb-data/owners/<opaque-owner>/sessions/<sessionId>/pi/`。
 
 工具按模型输出顺序串行执行，执行处校验知识库前置条件；本轮已有内部证据后，后续空结果不能绕过限制。每次尝试占用调用预算，超额或超时由监督器取消，不在工具回调内等待自身结束。
 
-回答使用 `[E:ev_xxx]`。证据正文和元数据只保存在 Pi 工具结果中，引用须属于当前活动分支；未知 ID 标为 invalid，没有引用为 not_applicable。引用存在不代表结论已被专业验证。仅展示真实取得的页码、文档和 HTTP/HTTPS 链接。压缩后 get_evidence 可取回原文。
-
 PCB 压缩扩展直接调用 Pi 原生 compact，传入 `resources/pcb/compaction.md`，复用 preparation、split-turn、摘要重试与历史持久化。Pi 扩展处理器会捕获异常，因此摘要失败时显式取消压缩，报告中断并保留原始历史，禁止再回落执行通用摘要。没有修改 Pi 核心，没有第二套摘要或消息存储。
 
 ## HTTP 与客户端
