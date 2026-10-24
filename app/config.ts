@@ -68,7 +68,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
 		idleTtlMs: integer("PCB_SESSION_IDLE_TTL_MS", 600000),
 		maxActiveRequests: integer("PCB_MAX_ACTIVE_REQUESTS", 4),
 		requestTimeoutMs: integer("PCB_REQUEST_TIMEOUT_MS", 180000),
-		maxToolCalls: integer("PCB_MAX_TOOL_CALLS", 8),
+		maxToolCalls: integer("PCB_MAX_TOOL_CALLS", 15),
 		retrievalTimeoutMs: integer("PCB_RETRIEVAL_TIMEOUT_MS", 15000),
 		allowWebSearch: boolean("PCB_ALLOW_WEB_SEARCH"),
 		allowWebOnKbError: boolean("PCB_ALLOW_WEB_ON_KB_ERROR"),
