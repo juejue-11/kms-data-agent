@@ -46,7 +46,7 @@
                     <span>我的会话</span>
                     <button id="refresh-sessions-btn" class="icon-button" type="button" aria-label="刷新会话列表" title="刷新">↻</button>
                 </div>
-                <div id="session-list" class="session-list" role="listbox" aria-label="会话列表"></div>
+                <div id="session-list" class="session-list" role="list" aria-label="会话列表"></div>
             </nav>
 
             <div class="sidebar-foot">
@@ -88,6 +88,29 @@
             </div>
         </main>
     </div>
+    <!-- 两种会话操作复用弹窗样式，由 showModal 锁定背景和键盘焦点。 -->
+    <dialog id="session-rename-dialog" class="session-dialog" aria-labelledby="session-rename-heading">
+        <form id="session-rename-form" class="session-dialog-content">
+            <h2 id="session-rename-heading">重命名会话</h2>
+            <label class="session-title-label" for="session-rename-input">会话标题（最多100个字符）</label>
+            <input id="session-rename-input" class="session-title-input" type="text" autocomplete="off" aria-describedby="session-rename-error" autofocus>
+            <p id="session-rename-error" class="session-dialog-error" role="alert"></p>
+            <div class="session-dialog-actions">
+                <button id="session-rename-cancel" class="dialog-button dialog-button-secondary" type="button">取消</button>
+                <button id="session-rename-save" class="dialog-button dialog-button-primary" type="submit">保存</button>
+            </div>
+        </form>
+    </dialog>
+    <dialog id="session-delete-dialog" class="session-dialog" aria-labelledby="session-delete-heading" aria-describedby="session-delete-message">
+        <div class="session-dialog-content">
+            <h2 id="session-delete-heading">删除会话</h2>
+            <p id="session-delete-message">删除会话及其关联消息后不可恢复。</p>
+            <div class="session-dialog-actions">
+                <button id="session-delete-cancel" class="dialog-button dialog-button-secondary" type="button">取消</button>
+                <button id="session-delete-confirm" class="dialog-button dialog-button-danger" type="button">确认删除</button>
+            </div>
+        </div>
+    </dialog>
     <script src="vendor/marked.umd.js"></script>
     <script src="js/markdown.js"></script>
     <!-- 先加载 HTTP/SSE 客户端，再初始化页面控制器；Markdown 渲染器独立复用。 -->

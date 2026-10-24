@@ -12,8 +12,20 @@ const runStatus = document.getElementById("run-status");
 const connectionDot = document.getElementById("connection-dot");
 const connectionTitle = document.getElementById("connection-title");
 const connectionDesc = document.getElementById("connection-desc");
+const deleteDialog = document.getElementById("session-delete-dialog");
+const deleteDialogMessage = document.getElementById("session-delete-message");
+const deleteCancelBtn = document.getElementById("session-delete-cancel");
+const deleteConfirmBtn = document.getElementById("session-delete-confirm");
+const renameDialog = document.getElementById("session-rename-dialog");
+const renameForm = document.getElementById("session-rename-form");
+const renameInput = document.getElementById("session-rename-input");
+const renameError = document.getElementById("session-rename-error");
+const renameCancelBtn = document.getElementById("session-rename-cancel");
+const renameSaveBtn = document.getElementById("session-rename-save");
 
 const SELECTED_SESSION_KEY = "pcb.selectedSessionId";
+const NEW_SESSION_TITLE = "新会话";
+const MAX_SESSION_TITLE_LENGTH = 100;
 const DEFAULT_WELCOME =
 	"你好，我是 PCB 缺陷分析助手。请描述你遇到的异常现象（例如「线路上有开路/短路」「焊盘有绿油残留」），我会帮你定位缺陷类型并标注判定依据。";
 
@@ -24,6 +36,12 @@ const state = {
 	activeRequest: null,
 	loadingSession: false,
 	creatingSession: false,
+	deletingSessionId: null,
+	renamingSessionId: null,
+	pendingRenameSessionId: null,
+	pendingDeleteSessionId: null,
+	sessionListGeneration: 0,
+	sessionListVersion: 0,
 };
 
 const RECONCILE_DELAY_MS = 1500;
@@ -50,6 +68,23 @@ function safeStorageSet(key, value) {
 	} catch {
 		// 隐私浏览可能禁用本地存储；服务端会话仍是最终状态来源。
 	}
+}
+
+function safeStorageRemove(key) {
+	try {
+		window.localStorage.removeItem(key);
+	} catch {
+		// 隐私浏览可能禁用本地存储；清除失败不会影响当前页面状态。
+	}
+}
+
+function normalizeSessionTitle(value) {
+	return String(value ?? "").trim();
+}
+
+function sessionDisplayTitle(session) {
+	const title = normalizeSessionTitle(session?.title);
+	return title || NEW_SESSION_TITLE;
 }
 
 function makeRequestId() {
@@ -412,10 +447,24 @@ function eventStatus(event) {
 	if (type === "request_started") return "请求已开始";
 	return "";
 }
+
+function refreshSessionTitleAfterAcceptedRequest(request) {
+	if (request.sessionTitleRefreshStarted) return;
+	request.sessionTitleRefreshStarted = true;
+	void refreshSessions({ preserveSelection: true });
+}
+
 async function sendMessage() {
 	// 一个页面请求从生成 requestId 到终态渲染都绑定同一 generation，保证切换会话后旧流不能污染新页面。
 	const text = userInput.value.trim();
-	if (!text || state.activeRequest || state.loadingSession || state.creatingSession) return;
+	if (
+		!text ||
+		state.activeRequest ||
+		state.loadingSession ||
+		state.creatingSession ||
+		(state.deletingSessionId && state.deletingSessionId === state.sessionId)
+	)
+		return;
 	let sessionId = state.sessionId;
 	if (!sessionId) {
 		try {
@@ -456,6 +505,8 @@ async function sendMessage() {
 			signal: request.controller.signal,
 			onEvent: (event) => {
 				if (!currentRequest(request)) return;
+				if (["request_started", "message_delta", "message_completed", "request_finished"].includes(event?.type))
+					refreshSessionTitleAfterAcceptedRequest(request);
 				const status = eventStatus(event);
 				if (status) setRunStatus(status);
 				if (event?.type === "message_delta") {
@@ -478,14 +529,17 @@ async function sendMessage() {
 		});
 		if (!currentRequest(request)) return;
 		if (result.kind === "status") {
+			refreshSessionTitleAfterAcceptedRequest(request);
 			setRunStatus("请求已在服务端运行，未重复提交");
 			await reconcileRequest(request);
 			return;
 		}
 		if (result.final) {
+			refreshSessionTitleAfterAcceptedRequest(request);
 			finishRequest(request, result.final);
 			return;
 		}
+		refreshSessionTitleAfterAcceptedRequest(request);
 		await reconcileRequest(request);
 	} catch (error) {
 		if (!currentRequest(request)) return;
@@ -498,6 +552,28 @@ async function sendMessage() {
 		await reconcileRequest(request);
 	}
 }
+
+deleteCancelBtn.addEventListener("click", cancelDeleteSession);
+deleteConfirmBtn.addEventListener("click", () => {
+	void confirmDeleteSession();
+});
+deleteDialog.addEventListener("cancel", (event) => {
+	// 删除确认只能通过按钮关闭，点击原生遮罩不会触发关闭。
+	event.preventDefault();
+});
+renameForm.addEventListener("submit", (event) => {
+	event.preventDefault();
+	void renameSession(state.pendingRenameSessionId, renameInput.value);
+});
+renameCancelBtn.addEventListener("click", () => {
+	state.pendingRenameSessionId = null;
+	renameDialog.close();
+});
+renameDialog.addEventListener("cancel", (event) => {
+	// 保存进行中不能退出，以免取消按钮造成“改名已撤回”的误解。
+	if (state.renamingSessionId) event.preventDefault();
+	else state.pendingRenameSessionId = null;
+});
 
 async function stopMessage() {
 	const request = state.activeRequest;
@@ -540,15 +616,18 @@ function renderSessionList() {
 		return;
 	}
 	for (const session of state.sessions) {
-		const item = document.createElement("button");
-		item.type = "button";
+		const item = document.createElement("div");
 		item.className = `session-item${session.sessionId === state.sessionId ? " active" : ""}`;
-		item.setAttribute("role", "option");
-		item.setAttribute("aria-selected", String(session.sessionId === state.sessionId));
+		item.setAttribute("role", "listitem");
+
+		const selectButton = document.createElement("button");
+		selectButton.type = "button";
+		selectButton.className = "session-item-main";
+		selectButton.setAttribute("aria-current", session.sessionId === state.sessionId ? "page" : "false");
 		const title = document.createElement("span");
 		title.className = "session-item-title";
-		title.textContent = session.title || session.name || session.sessionId || "未命名会话";
-		item.appendChild(title);
+		title.textContent = sessionDisplayTitle(session);
+		selectButton.appendChild(title);
 		const meta = document.createElement("span");
 		meta.className = "session-item-meta";
 		const status = session.activeRequestId ? "运行中" : "待机";
@@ -559,31 +638,88 @@ function renderSessionList() {
 		if (session.updatedAt || session.createdAt) {
 			meta.appendChild(document.createTextNode(` · ${formatSessionDate(session.updatedAt || session.createdAt)}`));
 		}
-		item.appendChild(meta);
-		item.addEventListener("click", () => {
+		selectButton.appendChild(meta);
+		selectButton.addEventListener("click", () => {
 			void selectSession(session.sessionId);
 		});
+		item.appendChild(selectButton);
+
+		const actions = document.createElement("div");
+		actions.className = "session-item-actions";
+		const renameButton = document.createElement("button");
+		renameButton.type = "button";
+		renameButton.className = "session-action";
+		renameButton.textContent = "重命名";
+		renameButton.setAttribute("aria-label", `重命名${sessionDisplayTitle(session)}`);
+		renameButton.disabled = Boolean(state.deletingSessionId || state.renamingSessionId);
+		renameButton.addEventListener("click", () => {
+			requestRenameSession(session.sessionId);
+		});
+		actions.appendChild(renameButton);
+
+		const deleteButton = document.createElement("button");
+		deleteButton.type = "button";
+		deleteButton.className = "session-action session-delete-action";
+		deleteButton.textContent = "删除";
+		deleteButton.setAttribute("aria-label", `删除${sessionDisplayTitle(session)}`);
+		deleteButton.disabled = Boolean(state.deletingSessionId || state.renamingSessionId);
+		deleteButton.addEventListener("click", () => {
+			requestDeleteSession(session.sessionId);
+		});
+		actions.appendChild(deleteButton);
+		item.appendChild(actions);
 		sessionList.appendChild(item);
 	}
 }
 
+function invalidateActiveRequest() {
+	const previous = state.activeRequest;
+	if (previous) {
+		clearReconcileTimer(previous);
+		previous.controller.abort();
+	}
+	state.activeRequest = null;
+	setSending(false);
+}
+
+function showEmptySession() {
+	// 删除最后一个会话或首次打开空列表时只准备空白页面，发送消息前再创建后端会话。
+	state.viewGeneration += 1;
+	invalidateActiveRequest();
+	state.sessionId = null;
+	safeStorageRemove(SELECTED_SESSION_KEY);
+	sessionTitle.textContent = NEW_SESSION_TITLE;
+	setRunStatus("");
+	clearChat();
+	addWelcome();
+	renderSessionList();
+}
+
 async function refreshSessions({ preserveSelection = false } = {}) {
+	const generation = ++state.sessionListGeneration;
+	const version = state.sessionListVersion;
 	state.loadingSession = true;
 	try {
 		const response = await api.listSessions({ limit: 100 });
+		if (generation !== state.sessionListGeneration || version !== state.sessionListVersion) return false;
 		state.sessions = Array.isArray(response.sessions) ? response.sessions : [];
 		setConnection(true, `${state.sessions.length} 个会话`);
 		renderSessionList();
-		if (preserveSelection) return;
+		const current = state.sessions.find((session) => session.sessionId === state.sessionId);
+		if (current) sessionTitle.textContent = sessionDisplayTitle(current);
+		if (preserveSelection) return true;
 		const stored = safeStorageGet(SELECTED_SESSION_KEY);
 		const selected = state.sessions.find((session) => session.sessionId === stored) || state.sessions[0];
 		if (selected) await selectSession(selected.sessionId);
-		else await createSession();
+		else showEmptySession();
+		return true;
 	} catch (error) {
+		if (generation !== state.sessionListGeneration) return false;
 		setConnection(false, error.message || "无法加载会话列表");
 		setRunStatus("服务不可达，请确认后端已启动", true);
+		return false;
 	} finally {
-		if (!state.creatingSession) state.loadingSession = false;
+		if (generation === state.sessionListGeneration && !state.creatingSession) state.loadingSession = false;
 	}
 }
 
@@ -592,18 +728,13 @@ async function createSession() {
 	state.creatingSession = true;
 	state.loadingSession = true;
 	try {
-		if (state.activeRequest) {
-			clearReconcileTimer(state.activeRequest);
-			state.activeRequest.controller.abort();
-			state.activeRequest = null;
-			setSending(false);
-		}
+		state.viewGeneration += 1;
+		invalidateActiveRequest();
 		const created = await api.createSession();
 		if (!created.sessionId) throw new Error("服务未返回会话 ID");
-		state.viewGeneration += 1;
 		state.sessionId = created.sessionId;
 		safeStorageSet(SELECTED_SESSION_KEY, state.sessionId);
-		sessionTitle.textContent = "新建对话";
+		sessionTitle.textContent = sessionDisplayTitle(created);
 		setRunStatus("");
 		clearChat();
 		addWelcome();
@@ -617,18 +748,13 @@ async function createSession() {
 async function selectSession(sessionId) {
 	if (!sessionId) return;
 	// 先使旧视图失效并中止其控制器，再加载新会话；旧请求即使随后回调也会被 currentRequest 拦截。
-	const previous = state.activeRequest;
 	const generation = state.viewGeneration + 1;
 	state.viewGeneration = generation;
-	if (previous) {
-		clearReconcileTimer(previous);
-		previous.controller.abort();
-	}
-	state.activeRequest = null;
-	setSending(false);
+	invalidateActiveRequest();
 	state.sessionId = sessionId;
 	safeStorageSet(SELECTED_SESSION_KEY, sessionId);
 	state.loadingSession = true;
+	const sessionListVersion = state.sessionListVersion;
 	const isCurrentView = () => state.sessionId === sessionId && state.viewGeneration === generation;
 	renderSessionList();
 	clearChat();
@@ -639,7 +765,11 @@ async function selectSession(sessionId) {
 			api.getMessages(sessionId, { limit: 100 }),
 		]);
 		if (!isCurrentView()) return;
-		sessionTitle.textContent = session.title || session.name || `会话 ${sessionId.slice(0, 8)}`;
+		const latestSession = state.sessions.find((item) => item.sessionId === sessionId);
+		sessionTitle.textContent =
+			state.sessionListVersion !== sessionListVersion && latestSession
+				? sessionDisplayTitle(latestSession)
+				: sessionDisplayTitle(session);
 		renderHistory(history.messages);
 		setConnection(true, "会话已恢复");
 		const activeRequestId = session.activeRequestId;
@@ -672,6 +802,133 @@ async function selectSession(sessionId) {
 	}
 }
 
+function requestRenameSession(sessionId) {
+	const session = state.sessions.find((item) => item.sessionId === sessionId);
+	if (!session || state.renamingSessionId || state.deletingSessionId) return;
+	state.pendingRenameSessionId = sessionId;
+	renameInput.value = sessionDisplayTitle(session);
+	renameError.textContent = "";
+	renameDialog.showModal();
+}
+
+async function renameSession(sessionId, requestedTitle) {
+	const session = state.sessions.find((item) => item.sessionId === sessionId);
+	if (!session || state.renamingSessionId || state.deletingSessionId) return false;
+	const title = normalizeSessionTitle(requestedTitle);
+	if (!title) {
+		renameError.textContent = "会话标题不能为空";
+		setRunStatus("会话标题不能为空", true);
+		return false;
+	}
+	if (Array.from(title).length > MAX_SESSION_TITLE_LENGTH) {
+		renameError.textContent = `会话标题不能超过${MAX_SESSION_TITLE_LENGTH}个字符`;
+		setRunStatus(`会话标题不能超过${MAX_SESSION_TITLE_LENGTH}个字符`, true);
+		return false;
+	}
+	state.renamingSessionId = sessionId;
+	renameError.textContent = "";
+	renameSaveBtn.disabled = true;
+	renameCancelBtn.disabled = true;
+	state.sessionListVersion += 1;
+	renderSessionList();
+	try {
+		const updated = await api.renameSession(sessionId, title);
+		state.sessionListVersion += 1;
+		const updatedTitle = normalizeSessionTitle(updated.title) || title;
+		state.sessions = state.sessions.map((item) =>
+			item.sessionId === sessionId ? { ...item, ...updated, sessionId, title: updatedTitle } : item,
+		);
+		if (state.sessionId === sessionId) sessionTitle.textContent = updatedTitle;
+		if (state.pendingRenameSessionId === sessionId) {
+			state.pendingRenameSessionId = null;
+			renameDialog.close();
+		}
+		renderSessionList();
+		setRunStatus("");
+		return true;
+	} catch (error) {
+		renameError.textContent = error.message || "会话重命名失败";
+		setRunStatus(error.message || "会话重命名失败", true);
+		return false;
+	} finally {
+		if (state.renamingSessionId === sessionId) state.renamingSessionId = null;
+		renameSaveBtn.disabled = false;
+		renameCancelBtn.disabled = false;
+		renderSessionList();
+	}
+}
+
+function closeDeleteDialog() {
+	state.pendingDeleteSessionId = null;
+	if (deleteDialog.open) deleteDialog.close();
+}
+
+function requestDeleteSession(sessionId) {
+	const session = state.sessions.find((item) => item.sessionId === sessionId);
+	if (!session || state.deletingSessionId || state.renamingSessionId) return false;
+	state.pendingDeleteSessionId = sessionId;
+	deleteDialogMessage.textContent = `删除“${sessionDisplayTitle(session)}”及其关联消息后不可恢复。`;
+	deleteDialog.showModal();
+	return true;
+}
+
+function cancelDeleteSession() {
+	closeDeleteDialog();
+}
+
+async function confirmDeleteSession() {
+	const sessionId = state.pendingDeleteSessionId;
+	if (!sessionId || state.deletingSessionId) return false;
+	closeDeleteDialog();
+	return deleteSession(sessionId);
+}
+
+async function deleteSession(sessionId) {
+	if (!sessionId || state.deletingSessionId) return false;
+	const wasCurrent = state.sessionId === sessionId;
+	if (wasCurrent) {
+		// 删除接口会等待并取消服务端请求；这里先停止本地流，避免删除后的迟到事件写回页面。
+		state.viewGeneration += 1;
+		invalidateActiveRequest();
+		state.loadingSession = false;
+	}
+	state.deletingSessionId = sessionId;
+	state.sessionListVersion += 1;
+	renderSessionList();
+	setRunStatus("正在删除会话…");
+	try {
+		await api.deleteSession(sessionId);
+		state.sessionListVersion += 1;
+		state.sessions = state.sessions.filter((session) => session.sessionId !== sessionId);
+		const shouldNavigate = state.sessionId === sessionId;
+		if (shouldNavigate) {
+			state.sessionId = null;
+			safeStorageRemove(SELECTED_SESSION_KEY);
+		}
+		renderSessionList();
+		await refreshSessions({ preserveSelection: true });
+		if (shouldNavigate && state.sessionId === null) {
+			const next = state.sessions[0];
+			if (next) await selectSession(next.sessionId);
+			else showEmptySession();
+		}
+		if (!state.activeRequest) setRunStatus("");
+		return true;
+	} catch (error) {
+		const message = error.message || "会话删除失败，可重试";
+		const shouldRestore = wasCurrent && state.sessionId === sessionId;
+		if (shouldRestore) {
+			await selectSession(sessionId);
+			if (state.sessionId === sessionId) setRunStatus(message, true);
+		} else setRunStatus(message, true);
+		renderSessionList();
+		return false;
+	} finally {
+		if (state.deletingSessionId === sessionId) state.deletingSessionId = null;
+		renderSessionList();
+	}
+}
+
 newSessionBtn.addEventListener("click", () => {
 	void createSession().catch((error) => {
 		setConnection(false, error.message);
@@ -701,6 +958,11 @@ window.PcbClientController = Object.freeze({
 	refreshSessions,
 	selectSession,
 	createSession,
+	requestRenameSession,
+	renameSession,
+	requestDeleteSession,
+	cancelDeleteSession,
+	confirmDeleteSession,
 	sendMessage,
 	stopMessage,
 	parseSourceKind: sourceKind,

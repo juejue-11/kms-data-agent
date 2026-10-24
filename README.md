@@ -31,7 +31,7 @@ node --import ./packages/coding-agent/src/experimental/source-resolver.ts --env-
 
 模型、思考级别、compaction 与 retry 统一使用 `.pi-agent/settings.json`，认证使用 `.pi-agent/auth.json`，自定义模型使用 `.pi-agent/models.json`，格式沿用 [Pi 设置](packages/coding-agent/docs/settings.md) 与 [模型配置](packages/coding-agent/docs/models.md)。网页和 CLI 不单独接收模型凭据。
 
-Pi JSONL 保存在 `.pcb-data/owners/<opaque-owner>/sessions/<sessionId>/pi/`。metadata 和 requests 只存归属、正文哈希、状态和条目关联，不复制聊天正文。首次用户消息前 Pi 文件可以不存在；实例闲置回收后历史保留。缺失或损坏的非空历史会明确报错。
+Pi JSONL 保存在 `.pcb-data/owners/<opaque-owner>/sessions/<sessionId>/pi/`。metadata 保存归属、标题和状态，requests 保存正文哈希、状态和条目关联，不另存完整聊天正文。首次用户消息前 Pi 文件可以不存在；实例闲置回收后历史保留。缺失或损坏的非空历史会明确报错。
 
 同一数据目录只允许一个服务进程，`service.lock` 防止多个写入者。遗留锁仅在确认原进程已退出时处理，损坏锁须人工检查。备份时同时保留 JSONL、索引和 identity-secret。访客由服务端签发的 HttpOnly、SameSite Cookie 隔离，签名密钥跨重启稳定。CLI 保存服务端 Cookie，不允许自报其他用户身份。凭据丢失后仅凭旧会话 ID 不能恢复权限。公网部署应通过 HTTPS 反向代理和已验证账号身份接入；当前实现为独立访客模式。
 
@@ -49,11 +49,15 @@ PCB 压缩扩展直接调用 Pi 原生 compact，传入 `resources/pcb/compactio
 |---|---|
 | POST /api/sessions | 新建本人会话 |
 | GET /api/sessions | 分页列出本人会话 |
-| GET /api/sessions/:id | 状态和 activeRequestId |
+| GET /api/sessions/:id | 标题、状态和 activeRequestId |
+| PATCH /api/sessions/:id | 提交 `{title}` 重命名，去除首尾空白后为 1～100 个字符 |
+| DELETE /api/sessions/:id | 停止并等待活动请求，删除元数据、请求记录和 Pi 消息历史 |
 | GET /api/sessions/:id/messages?before=&limit= | 从 Pi 活动分支投影历史 |
 | POST /api/sessions/:id/messages | 提交 `{requestId,message}`，Accept 为 JSON 或 text/event-stream |
 | GET /api/sessions/:id/requests/:requestId | 查询运行和终态 |
 | POST /api/sessions/:id/requests/:requestId/cancel | 幂等停止指定请求 |
+
+创建和查询均返回 `title`。空会话显示“新会话”，首次受理提问时取第一句话的前 20 个字符，超长加“…”；手动名称优先保留并持久化。网页列表提供重命名和删除操作，删除须在锁定背景的模态框中确认，点击遮罩不会关闭；删除当前会话后切换到其他会话，列表为空时显示新会话页。
 
 requestId 为客户端 UUID。同 ID 同内容不再执行模型，运行中返回 202 JSON，终态返回既有结果；同 ID 不同内容返回 409。新请求遇到运行会话返回 SESSION_BUSY，服务并发上限返回 SERVICE_BUSY。客户端检查实际 Content-Type，断流后查询，不自动重发。
 

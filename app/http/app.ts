@@ -85,9 +85,20 @@ export function createHttpServer(service: AgentService, dataDir: string) {
 			}
 		}
 		const sessionId = parts[2];
-		if (parts.length === 3 && request.method === "GET") {
-			json(response, 200, service.get(ownerId, sessionId));
-			return;
+		if (parts.length === 3) {
+			if (request.method === "GET") {
+				json(response, 200, service.get(ownerId, sessionId));
+				return;
+			}
+			if (request.method === "PATCH") {
+				const input = await body(request);
+				json(response, 200, service.rename(ownerId, sessionId, input.title));
+				return;
+			}
+			if (request.method === "DELETE") {
+				json(response, 200, await service.delete(ownerId, sessionId));
+				return;
+			}
 		}
 		if (parts.length === 4 && parts[3] === "messages") {
 			if (request.method === "GET") {

@@ -1,5 +1,14 @@
 import { createHash, randomUUID } from "node:crypto";
-import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
+import {
+	existsSync,
+	mkdirSync,
+	readdirSync,
+	readFileSync,
+	renameSync,
+	rmSync,
+	unlinkSync,
+	writeFileSync,
+} from "node:fs";
 import { dirname, join } from "node:path";
 import { AppError, type RequestStatus, requireId } from "../contracts/protocol.ts";
 
@@ -14,7 +23,10 @@ export interface SessionMetadata {
 	updatedAt: string;
 	configVersion: string;
 	hasConversation: boolean;
+	// 标题为可选字段，读取旧元数据时自然回退到默认标题，无需迁移历史文件。
+	title?: string;
 }
+export const DEFAULT_SESSION_TITLE = "新会话";
 // 请求元数据是幂等、恢复和结果投影的持久化索引，不替代 Pi 分支本身。
 export interface RequestMetadata {
 	schemaVersion: 1;
@@ -65,7 +77,9 @@ export class SessionStore {
 				value.sessionId !== sessionId ||
 				!requireId(value.piSessionId) ||
 				!/^[^/\\]+\.jsonl$/.test(value.piSessionFile) ||
-				typeof value.hasConversation !== "boolean"
+				typeof value.hasConversation !== "boolean" ||
+				(value.title !== undefined &&
+					(typeof value.title !== "string" || !value.title.trim() || Array.from(value.title.trim()).length > 100))
 			)
 				throw new Error("Invalid metadata");
 			return value;
@@ -114,5 +128,9 @@ export class SessionStore {
 		return readdirSync(path)
 			.filter((file) => file.endsWith(".json"))
 			.map((file) => this.readRequest(ownerId, sessionId, file.slice(0, -5))!);
+	}
+	// 删除整个业务会话目录，连同请求索引、Pi 历史和其它关联文件一起清理。
+	deleteSession(ownerId: string, sessionId: string): void {
+		rmSync(this.sessionDir(ownerId, requireId(sessionId)), { recursive: true, force: true });
 	}
 }

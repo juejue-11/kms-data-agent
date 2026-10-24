@@ -235,6 +235,21 @@
 			return asObject(response.data);
 		}
 
+		async renameSession(sessionId, title) {
+			const response = await this.requestJson(`/api/sessions/${pathPart(sessionId)}`, {
+				method: "PATCH",
+				body: { title },
+			});
+			return asObject(response.data);
+		}
+
+		async deleteSession(sessionId) {
+			const response = await this.requestJson(`/api/sessions/${pathPart(sessionId)}`, {
+				method: "DELETE",
+			});
+			return asObject(response.data);
+		}
+
 		async getMessages(sessionId, { before, limit } = {}) {
 			const response = await this.requestJson(
 				`/api/sessions/${pathPart(sessionId)}/messages${this.query({ before, limit })}`,

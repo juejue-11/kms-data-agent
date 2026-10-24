@@ -123,6 +123,18 @@ export class SessionRegistry {
 			}
 		}
 	}
+	// 删除前等待正在初始化的 AgentSession，避免目录清理后异步工厂又写回 Pi 文件。
+	async waitForInitialization(sessionId: string): Promise<void> {
+		const pending = this.pending.get(sessionId);
+		if (pending) await Promise.allSettled([pending]);
+	}
+	// 删除会话时先释放缓存实例和初始化残留；调用方需先等待 pending 完成。
+	disposeSession(sessionId: string): void {
+		const live = this.instances.get(sessionId);
+		live?.session.dispose();
+		this.instances.delete(sessionId);
+		this.initializingManagers.delete(sessionId);
+	}
 	// 服务关闭时释放所有 AgentSession；未完成的初始化由调用方先等待。
 	dispose(): void {
 		for (const live of this.instances.values()) live.session.dispose();

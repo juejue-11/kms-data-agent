@@ -1,7 +1,7 @@
 // 会话端到端验收：复用真实 Pi 持久化和运行时，以假模型验证恢复、并发、取消、压缩及 HTTP。
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
@@ -10,7 +10,7 @@ import { AgentService, type Submission } from "../../app/agent/agent-service.ts"
 import { PcbHttpClient } from "../../app/cli/http-client.ts";
 import { loadConfig } from "../../app/config.ts";
 import { createHttpServer } from "../../app/http/app.ts";
-import { runtimeFromModel } from "../../app/runtime/pi-runtime.ts";
+import { type PiRuntime, runtimeFromModel } from "../../app/runtime/pi-runtime.ts";
 import { acquireDataLock } from "../../app/sessions/data-lock.ts";
 import { type Settings, SettingsManager } from "../../packages/coding-agent/src/core/settings-manager.ts";
 import { createHarness, getMessageText } from "../../packages/coding-agent/test/suite/harness.ts";
@@ -26,19 +26,21 @@ async function setup(settings: Partial<Settings> = {}, harnessOptions: Parameter
 		PCB_SESSION_IDLE_TTL_MS: "1",
 		PCB_REQUEST_TIMEOUT_MS: "5000",
 	});
-	const create = () =>
+	const create = (runtimeOverride?: PiRuntime) =>
 		new AgentService({
 			config,
-			runtime: runtimeFromModel(config, harness.session.modelRuntime, () =>
-				SettingsManager.inMemory({
-					defaultProvider: harness.getModel().provider,
-					defaultModel: harness.getModel().id,
-					retry: { enabled: false },
-					cacheWarming: "off",
-					compaction: { keepRecentTokens: 5, reserveTokens: 256 },
-					...settings,
-				}),
-			),
+			runtime:
+				runtimeOverride ??
+				runtimeFromModel(config, harness.session.modelRuntime, () =>
+					SettingsManager.inMemory({
+						defaultProvider: harness.getModel().provider,
+						defaultModel: harness.getModel().id,
+						retry: { enabled: false },
+						cacheWarming: "off",
+						compaction: { keepRecentTokens: 5, reserveTokens: 256 },
+						...settings,
+					}),
+				),
 			tools: () => ({ extensions: [], toolNames: [] }),
 			validate: () => ({ sources: [], citationValidation: { status: "not_applicable", invalidIds: [] } }),
 		});
@@ -118,6 +120,239 @@ test("native Pi history carries two turns, survives reaping and service restart,
 	}
 });
 
+test("session titles default, derive from the first question, persist manual names and survive restart", async () => {
+	const env = await setup();
+	let restarted: AgentService | undefined;
+	try {
+		const fresh = env.service.create("title-owner");
+		assert.equal(fresh.title, "新会话");
+		assert.equal(env.service.get("title-owner", fresh.sessionId).title, "新会话");
+		env.harness.setResponses([fauxAssistantMessage("已记录")]);
+		const first = `${"😀".repeat(21)}。第二句话不应进入标题`;
+		await finish(env.service.submit("title-owner", fresh.sessionId, { requestId: randomUUID(), message: first }));
+		assert.equal(env.service.get("title-owner", fresh.sessionId).title, `${"😀".repeat(20)}…`);
+		env.service.rename("title-owner", fresh.sessionId, "  人工标题  ");
+		env.harness.setResponses([fauxAssistantMessage("继续")]);
+		await finish(
+			env.service.submit("title-owner", fresh.sessionId, { requestId: randomUUID(), message: "后续问题不应改名" }),
+		);
+		assert.equal(env.service.get("title-owner", fresh.sessionId).title, "人工标题");
+		env.harness.setResponses([fauxAssistantMessage("保留手动默认名")]);
+		const manualDefault = env.service.create("title-owner");
+		env.service.rename("title-owner", manualDefault.sessionId, "新会话");
+		await finish(
+			env.service.submit("title-owner", manualDefault.sessionId, {
+				requestId: randomUUID(),
+				message: "首问不应覆盖手动设置的默认标题",
+			}),
+		);
+		assert.equal(env.service.get("title-owner", manualDefault.sessionId).title, "新会话");
+		await env.service.close();
+		restarted = env.create();
+		assert.equal(restarted.get("title-owner", fresh.sessionId).title, "人工标题");
+	} finally {
+		await restarted?.close();
+		await env.cleanup();
+	}
+});
+
+test("first accepted question titles are immediately visible, sentence aware and stable after failure", async () => {
+	const env = await setup();
+	try {
+		const cases = [
+			["首句中文。后续中文", "首句中文"],
+			["English first. Second sentence", "English first"],
+			["厚度1.6mm需要继续确认。第二句", "厚度1.6mm需要继续确认"],
+			[`${"一".repeat(20)}。再来一句`, "一".repeat(20)],
+			["。开头标点仍需有效标题", "。开头标点仍需有效标题"],
+		] as const;
+		for (const [message, expected] of cases) {
+			const { sessionId } = env.service.create("sentence-owner");
+			env.harness.setResponses([fauxAssistantMessage("完成")]);
+			const submission = env.service.submit("sentence-owner", sessionId, {
+				requestId: randomUUID(),
+				message,
+			});
+			// submit 同步落盘标题，模型尚未完成时 GET 也必须返回新标题。
+			assert.equal(env.service.get("sentence-owner", sessionId).title, expected);
+			assert.equal((await finish(submission)).status, "succeeded");
+		}
+
+		const failed = env.service.create("sentence-owner");
+		env.harness.setResponses([
+			fauxAssistantMessage("", { stopReason: "error", errorMessage: "controlled failure" }),
+			fauxAssistantMessage("第二问完成"),
+		]);
+		const first = env.service.submit("sentence-owner", failed.sessionId, {
+			requestId: randomUUID(),
+			message: "模型失败首问。后续内容不应成为标题",
+		});
+		assert.equal(env.service.get("sentence-owner", failed.sessionId).title, "模型失败首问");
+		assert.equal((await finish(first)).status, "failed");
+		assert.equal(
+			(
+				await finish(
+					env.service.submit("sentence-owner", failed.sessionId, {
+						requestId: randomUUID(),
+						message: "第二个问题",
+					}),
+				)
+			).status,
+			"succeeded",
+		);
+		assert.equal(env.service.get("sentence-owner", failed.sessionId).title, "模型失败首问");
+	} finally {
+		await env.cleanup();
+	}
+});
+
+test("session title validation trims Unicode and enforces the 100 code point limit", async () => {
+	const env = await setup();
+	try {
+		const { sessionId } = env.service.create("validation-owner");
+		const valid = `  ${"😀".repeat(100)}  `;
+		assert.equal(env.service.rename("validation-owner", sessionId, valid).title, "😀".repeat(100));
+		for (const invalid of [undefined, null, 123, {}, "", "   ", "😀".repeat(101)]) {
+			assert.throws(() => env.service.rename("validation-owner", sessionId, invalid), /INVALID_INPUT/);
+		}
+		assert.equal(env.service.get("validation-owner", sessionId).title, "😀".repeat(100));
+	} finally {
+		await env.cleanup();
+	}
+});
+
+test("manual rename during execution remains after the stale execution metadata is persisted", async () => {
+	const env = await setup();
+	try {
+		const { sessionId } = env.service.create("rename-owner");
+		let entered!: () => void;
+		let release!: () => void;
+		const started = new Promise<void>((resolve) => {
+			entered = resolve;
+		});
+		const paused = new Promise<void>((resolve) => {
+			release = resolve;
+		});
+		env.harness.setResponses([
+			async () => {
+				entered();
+				await paused;
+				return fauxAssistantMessage("完成");
+			},
+		]);
+		const submission = env.service.submit("rename-owner", sessionId, {
+			requestId: randomUUID(),
+			message: "首问",
+		});
+		submission.start!();
+		await started;
+		env.service.rename("rename-owner", sessionId, "执行中改名");
+		release();
+		assert.equal((await finish(submission)).status, "succeeded");
+		assert.equal(env.service.get("rename-owner", sessionId).title, "执行中改名");
+	} finally {
+		await env.cleanup();
+	}
+});
+
+test("deleting a session waits for its active request and removes requests, Pi history and registry cache", async () => {
+	const env = await setup();
+	try {
+		const { sessionId } = env.service.create("delete-owner");
+		let entered!: () => void;
+		const started = new Promise<void>((resolve) => {
+			entered = resolve;
+		});
+		env.harness.setResponses([
+			async (_context, options) => {
+				entered();
+				await new Promise<void>((resolve) => {
+					options?.signal?.addEventListener("abort", () => resolve(), { once: true });
+				});
+				return fauxAssistantMessage("已停止", { stopReason: "aborted" });
+			},
+		]);
+		const submission = env.service.submit("delete-owner", sessionId, {
+			requestId: randomUUID(),
+			message: "等待删除",
+		});
+		submission.start!();
+		await started;
+		const directory = env.service.store.sessionDir("delete-owner", sessionId);
+		assert.ok(existsSync(directory));
+		const deletion = env.service.delete("delete-owner", sessionId);
+		assert.throws(
+			() => env.service.submit("delete-owner", sessionId, { requestId: randomUUID(), message: "删除期间禁止提交" }),
+			/SESSION_BUSY/,
+		);
+		assert.throws(() => env.service.messages("delete-owner", sessionId), /SESSION_BUSY/);
+		assert.deepEqual(await deletion, { sessionId, deleted: true });
+		assert.equal((await finish(submission)).status, "cancelled");
+		assert.equal(existsSync(directory), false);
+		assert.equal(env.service.registry.instances.has(sessionId), false);
+		assert.throws(() => env.service.get("delete-owner", sessionId), /SESSION_NOT_FOUND/);
+		assert.equal(env.service.list("delete-owner").sessions.length, 0);
+	} finally {
+		await env.cleanup();
+	}
+});
+
+test("deleting during AgentSession initialization waits for the pending factory and prevents directory resurrection", async () => {
+	const env = await setup();
+	let delayedService: AgentService | undefined;
+	try {
+		await env.service.close();
+		let entered!: () => void;
+		let release!: () => void;
+		const initialized = new Promise<void>((resolve) => {
+			entered = resolve;
+		});
+		const gate = new Promise<void>((resolve) => {
+			release = resolve;
+		});
+		const baseRuntime = runtimeFromModel(env.config, env.harness.session.modelRuntime, () =>
+			SettingsManager.inMemory({
+				defaultProvider: env.harness.getModel().provider,
+				defaultModel: env.harness.getModel().id,
+				retry: { enabled: false },
+				cacheWarming: "off",
+				compaction: { keepRecentTokens: 5, reserveTokens: 256 },
+			}),
+		);
+		const delayedRuntime: PiRuntime = {
+			async createSession(manager, extensions, toolNames, report) {
+				entered();
+				await gate;
+				return baseRuntime.createSession(manager, extensions, toolNames, report);
+			},
+		};
+		delayedService = env.create(delayedRuntime);
+		const { sessionId } = delayedService.create("initializing-owner");
+		env.harness.setResponses([fauxAssistantMessage("初始化后不应落盘")]);
+		const submission = delayedService.submit("initializing-owner", sessionId, {
+			requestId: randomUUID(),
+			message: "初始化期间删除",
+		});
+		submission.start!();
+		await initialized;
+		const directory = delayedService.store.sessionDir("initializing-owner", sessionId);
+		const deletion = delayedService.delete("initializing-owner", sessionId);
+		assert.throws(
+			() => delayedService!.submit("initializing-owner", sessionId, { requestId: randomUUID(), message: "锁定" }),
+			/SESSION_BUSY/,
+		);
+		release();
+		assert.deepEqual(await deletion, { sessionId, deleted: true });
+		assert.equal((await finish(submission)).status, "cancelled");
+		assert.equal(existsSync(directory), false);
+		assert.equal(delayedService.registry.instances.has(sessionId), false);
+		assert.equal(delayedService.registry.pending.has(sessionId), false);
+	} finally {
+		await delayedService?.close();
+		await env.cleanup();
+	}
+});
+
 test("atomic reservation rejects concurrency; request ids deduplicate before busy checks; cancellation releases the session", async () => {
 	const env = await setup();
 	try {
@@ -187,7 +422,8 @@ test("HTTP uses signed persistent visitor credentials, same-origin writes, JSON 
 		const created = await fetch(`${base}/api/sessions`, { method: "POST" });
 		assert.equal(created.status, 201);
 		const cookie = created.headers.get("set-cookie")!.split(";")[0];
-		const session = (await created.json()) as { sessionId: string };
+		const session = (await created.json()) as { sessionId: string; title: string };
+		assert.equal(session.title, "新会话");
 		assert.equal((await fetch(`${base}/api/sessions/${session.sessionId}`)).status, 404);
 		assert.equal(
 			(await fetch(`${base}/api/sessions/${session.sessionId}`, { headers: { Cookie: cookie } })).status,
@@ -201,6 +437,76 @@ test("HTTP uses signed persistent visitor credentials, same-origin writes, JSON 
 				})
 			).status,
 			403,
+		);
+		assert.equal(
+			(
+				await fetch(`${base}/api/sessions/${session.sessionId}`, {
+					method: "PATCH",
+					headers: { Cookie: cookie, "Content-Type": "application/json" },
+					body: JSON.stringify({ title: "  HTTP 标题  " }),
+				})
+			).status,
+			200,
+		);
+		assert.equal(
+			(
+				await fetch(`${base}/api/sessions/${session.sessionId}`, {
+					method: "PATCH",
+					headers: { Cookie: cookie, "Content-Type": "application/json" },
+					body: JSON.stringify({ title: "   " }),
+				})
+			).status,
+			400,
+		);
+		const otherVisitor = await fetch(`${base}/api/sessions`, { method: "POST" });
+		const otherCookie = otherVisitor.headers.get("set-cookie")!.split(";")[0];
+		assert.equal(
+			(
+				await fetch(`${base}/api/sessions/${session.sessionId}`, {
+					method: "PATCH",
+					headers: { Cookie: otherCookie, "Content-Type": "application/json" },
+					body: JSON.stringify({ title: "越权改名" }),
+				})
+			).status,
+			404,
+		);
+		assert.equal(
+			(
+				await fetch(`${base}/api/sessions/${session.sessionId}`, {
+					method: "DELETE",
+					headers: { Cookie: otherCookie },
+				})
+			).status,
+			404,
+		);
+		assert.equal(
+			(
+				await fetch(`${base}/api/sessions/${session.sessionId}`, {
+					method: "PATCH",
+					headers: { Cookie: cookie, Origin: "https://attacker.invalid", "Content-Type": "application/json" },
+					body: JSON.stringify({ title: "跨源改名" }),
+				})
+			).status,
+			403,
+		);
+		assert.equal(
+			(
+				await fetch(`${base}/api/sessions/${session.sessionId}`, {
+					method: "DELETE",
+					headers: { Cookie: cookie, Origin: "https://attacker.invalid" },
+				})
+			).status,
+			403,
+		);
+		assert.equal(
+			(
+				(await (
+					await fetch(`${base}/api/sessions/${session.sessionId}`, { headers: { Cookie: cookie } })
+				).json()) as {
+					title: string;
+				}
+			).title,
+			"HTTP 标题",
 		);
 		env.harness.setResponses([fauxAssistantMessage("流式完成")]);
 		const input = { requestId: randomUUID(), message: "板面有划伤" };
@@ -234,6 +540,16 @@ test("HTTP uses signed persistent visitor credentials, same-origin writes, JSON 
 		assert.equal((await restoredCli.listSessions()).sessions?.length, 1);
 		assert.equal(
 			(await fetch(`${base}/api/sessions/${cliSession.sessionId}`, { headers: { Cookie: cookie } })).status,
+			404,
+		);
+		const deleted = await fetch(`${base}/api/sessions/${session.sessionId}`, {
+			method: "DELETE",
+			headers: { Cookie: cookie },
+		});
+		assert.equal(deleted.status, 200);
+		assert.deepEqual(await deleted.json(), { sessionId: session.sessionId, deleted: true });
+		assert.equal(
+			(await fetch(`${base}/api/sessions/${session.sessionId}`, { headers: { Cookie: cookie } })).status,
 			404,
 		);
 	} finally {

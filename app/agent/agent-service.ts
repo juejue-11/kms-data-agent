@@ -6,7 +6,12 @@ import { AppError, type BusinessEvent, isTerminal, type RequestResult, requireId
 import { adaptPiEvent } from "../runtime/event-adapter.ts";
 import { type AgentSession, type PiRuntime, type SessionEntry, SessionManager } from "../runtime/pi-runtime.ts";
 import { type LiveSession, SessionRegistry } from "../sessions/session-registry.ts";
-import { type RequestMetadata, type SessionMetadata, SessionStore } from "../sessions/session-store.ts";
+import {
+	DEFAULT_SESSION_TITLE,
+	type RequestMetadata,
+	type SessionMetadata,
+	SessionStore,
+} from "../sessions/session-store.ts";
 
 // 运行上下文只把当前请求的身份、取消信号和停止入口暴露给业务工具。
 export interface RunContext {
@@ -53,6 +58,7 @@ export class AgentService {
 	readonly registry: SessionRegistry;
 	private readonly options: ServiceOptions;
 	private readonly active = new Map<string, ActiveRun>();
+	private readonly deletionPromises = new Map<string, Promise<void>>();
 	private readonly reaper: ReturnType<typeof setInterval>;
 	private closing = false;
 	constructor(options: ServiceOptions) {
@@ -67,7 +73,7 @@ export class AgentService {
 		this.registry.reap(new Set(this.active.keys()), now);
 	}
 	// 创建业务会话并立即写入对应的 Pi 会话标识，后续请求复用同一历史文件。
-	create(ownerId: string): { sessionId: string; createdAt: string; updatedAt: string; status: string } {
+	create(ownerId: string): { sessionId: string; createdAt: string; updatedAt: string; status: string; title: string } {
 		if (this.closing) throw new AppError("SERVICE_BUSY", 503);
 		const sessionId = randomUUID();
 		const manager = SessionManager.create(
@@ -87,18 +93,21 @@ export class AgentService {
 			hasConversation: false,
 		};
 		this.store.writeSession(metadata);
-		return { sessionId, createdAt: now, updatedAt: now, status: "idle" };
+		return { sessionId, createdAt: now, updatedAt: now, status: "idle", title: DEFAULT_SESSION_TITLE };
 	}
 	// 按更新时间倒序分页列出会话；游标是上一页最后一个 sessionId。
 	list(ownerId: string, before?: string, limit = 30) {
-		const all = this.store.listSessions(ownerId);
+		const all = this.store.listSessions(ownerId).filter((metadata) => !this.deletionPromises.has(metadata.sessionId));
 		const index = before ? all.findIndex((item) => item.sessionId === requireId(before)) + 1 : 0;
 		const sessions = all.slice(index, index + limit).map((metadata) => this.describe(metadata));
 		return { sessions, nextCursor: index + limit < all.length ? sessions.at(-1)?.sessionId : undefined };
 	}
 	// 读取单个会话的轻量状态，不为查询强制初始化 Pi AgentSession。
 	get(ownerId: string, sessionId: string) {
-		return this.describe(this.store.readSession(ownerId, requireId(sessionId)));
+		const id = requireId(sessionId);
+		const metadata = this.store.readSession(ownerId, id);
+		this.ensureAvailable(id);
+		return this.describe(metadata);
 	}
 	private describe(metadata: SessionMetadata) {
 		const active = this.active.get(metadata.sessionId);
@@ -106,9 +115,27 @@ export class AgentService {
 			sessionId: metadata.sessionId,
 			createdAt: metadata.createdAt,
 			updatedAt: metadata.updatedAt,
+			title: metadata.title ?? DEFAULT_SESSION_TITLE,
 			status: active ? "running" : "idle",
 			activeRequestId: active?.metadata.requestId,
 		};
+	}
+	// 删除期间拒绝会打开 Pi manager 的新操作，避免清理目录后产生新的历史文件。
+	private ensureAvailable(sessionId: string): void {
+		if (this.deletionPromises.has(sessionId)) throw new AppError("SESSION_BUSY", 409);
+	}
+	// 校验并持久化手动标题；trim 后按 Unicode 码点计数，避免半个代理项造成错误长度。
+	rename(ownerId: string, sessionId: string, title: unknown) {
+		const id = requireId(sessionId);
+		const metadata = this.store.readSession(ownerId, id);
+		this.ensureAvailable(id);
+		if (typeof title !== "string") throw new AppError("INVALID_INPUT", 400);
+		const nextTitle = title.trim();
+		if (!nextTitle || Array.from(nextTitle).length > 100) throw new AppError("INVALID_INPUT", 400);
+		metadata.title = nextTitle;
+		metadata.updatedAt = new Date().toISOString();
+		this.store.writeSession(metadata);
+		return this.describe(metadata);
 	}
 	// 获取可执行的 LiveSession，并让工具通过 getRun 访问当前请求的取消边界。
 	private async live(metadata: SessionMetadata): Promise<LiveSession> {
@@ -142,7 +169,9 @@ export class AgentService {
 	}
 	// 从 Pi 当前分支投影出业务消息；未完成请求会先依据持久化状态尝试恢复。
 	messages(ownerId: string, sessionId: string, before?: string, limit = 50) {
-		const metadata = this.store.readSession(ownerId, requireId(sessionId));
+		const id = requireId(sessionId);
+		const metadata = this.store.readSession(ownerId, id);
+		this.ensureAvailable(id);
 		const manager = this.manager(metadata);
 		const branch = manager.getBranch();
 		const requests = this.store.listRequests(ownerId, sessionId);
@@ -201,8 +230,10 @@ export class AgentService {
 	}
 	// 查询单个请求；进程重启后，仍未结束且没有活动执行体的请求会先进入恢复流程。
 	request(ownerId: string, sessionId: string, requestId: string): RequestResult {
-		const metadata = this.store.readSession(ownerId, requireId(sessionId));
-		const request = this.store.readRequest(ownerId, sessionId, requireId(requestId));
+		const id = requireId(sessionId);
+		const metadata = this.store.readSession(ownerId, id);
+		this.ensureAvailable(id);
+		const request = this.store.readRequest(ownerId, id, requireId(requestId));
 		if (!request) throw new AppError("REQUEST_NOT_FOUND", 404);
 		if (!isTerminal(request.status) && this.active.get(sessionId)?.metadata.requestId !== requestId)
 			this.recover(metadata, request);
@@ -304,20 +335,27 @@ export class AgentService {
 	}
 	// 受理请求时先校验、持久化并占用会话，再异步启动执行；相同 requestId 通过消息哈希幂等返回。
 	submit(ownerId: string, sessionId: string, input: { requestId: unknown; message: unknown }): Submission {
-		requireId(sessionId);
+		const id = requireId(sessionId);
 		const requestId = requireId(input.requestId);
 		if (typeof input.message !== "string" || !input.message.trim() || input.message.length > 16000)
 			throw new AppError("INVALID_INPUT", 400);
-		const metadata = this.store.readSession(ownerId, sessionId);
+		const metadata = this.store.readSession(ownerId, id);
+		this.ensureAvailable(id);
 		const hash = createHash("sha256").update(input.message).digest("hex");
-		const previous = this.store.readRequest(ownerId, sessionId, requestId);
+		const previous = this.store.readRequest(ownerId, id, requestId);
 		if (previous) {
 			if (previous.messageHash !== hash) throw new AppError("REQUEST_ID_CONFLICT", 409);
-			return { duplicate: true, result: this.request(ownerId, sessionId, requestId) };
+			return { duplicate: true, result: this.request(ownerId, id, requestId) };
 		}
 		if (this.closing) throw new AppError("SERVICE_BUSY", 503);
-		if (this.active.has(sessionId)) throw new AppError("SESSION_BUSY", 409);
+		if (this.active.has(id)) throw new AppError("SESSION_BUSY", 409);
 		if (this.active.size >= this.options.config.maxActiveRequests) throw new AppError("SERVICE_BUSY", 429);
+		// 首次受理时立即生成标题并落盘；已有标题表示默认标题或手动标题均已确定。
+		if (!metadata.hasConversation && !metadata.title) {
+			metadata.title = titleFromMessage(input.message);
+			metadata.updatedAt = new Date().toISOString();
+			this.store.writeSession(metadata);
+		}
 		// 校验、持久化受理和资源预留同步完成，避免检查与使用之间出现竞态窗口。
 		const now = new Date().toISOString();
 		const request: RequestMetadata = {
@@ -328,7 +366,7 @@ export class AgentService {
 			createdAt: now,
 			updatedAt: now,
 		};
-		this.store.writeRequest(ownerId, sessionId, request);
+		this.store.writeRequest(ownerId, id, request);
 		let resolve!: ActiveRun["resolve"];
 		const done = new Promise<RequestResult>((finish) => {
 			resolve = finish;
@@ -341,7 +379,7 @@ export class AgentService {
 			done,
 			resolve,
 		};
-		this.active.set(sessionId, run);
+		this.active.set(id, run);
 		let started = false;
 		const message = input.message;
 		const start = () => {
@@ -361,6 +399,34 @@ export class AgentService {
 			},
 			start,
 		};
+	}
+	// 标记删除、停止并等待活动请求和初始化，再释放缓存并删除完整会话目录。
+	async delete(ownerId: string, sessionId: string): Promise<{ sessionId: string; deleted: true }> {
+		const id = requireId(sessionId);
+		this.store.readSession(ownerId, id);
+		const existing = this.deletionPromises.get(id);
+		if (existing) {
+			await existing;
+			return { sessionId: id, deleted: true };
+		}
+		const deletion = this.finishDelete(ownerId, id);
+		this.deletionPromises.set(id, deletion);
+		try {
+			await deletion;
+			return { sessionId: id, deleted: true };
+		} finally {
+			this.deletionPromises.delete(id);
+		}
+	}
+	private async finishDelete(ownerId: string, sessionId: string): Promise<void> {
+		const run = this.active.get(sessionId);
+		if (run) {
+			this.stopRun(run, "SESSION_DELETED");
+			await run.done;
+		}
+		await this.registry.waitForInitialization(sessionId);
+		this.registry.disposeSession(sessionId);
+		this.store.deleteSession(ownerId, sessionId);
 	}
 	// 记录一次停止原因并立即触发请求信号，再异步通知 Pi；不在 Pi 回调内等待 abort，避免回调自等待。
 	private stopRun(run: ActiveRun, code: string): void {
@@ -427,18 +493,29 @@ export class AgentService {
 				run.metadata.status =
 					!run.stopCode && reason === "stop"
 						? "succeeded"
-						: run.stopCode === "REQUEST_CANCELLED" || run.stopCode === "SERVICE_SHUTDOWN"
+						: run.stopCode === "REQUEST_CANCELLED" ||
+								run.stopCode === "SERVICE_SHUTDOWN" ||
+								run.stopCode === "SESSION_DELETED"
 							? "cancelled"
 							: "failed";
 				if (run.metadata.status !== "succeeded")
 					run.metadata.errorCode = run.stopCode ?? (reason === "length" ? "OUTPUT_LIMIT" : "MODEL_ERROR");
 			} else {
-				run.metadata.status = run.stopCode === "REQUEST_CANCELLED" ? "cancelled" : "failed";
+				run.metadata.status =
+					run.stopCode === "REQUEST_CANCELLED" ||
+					run.stopCode === "SERVICE_SHUTDOWN" ||
+					run.stopCode === "SESSION_DELETED"
+						? "cancelled"
+						: "failed";
 				run.metadata.errorCode = run.stopCode ?? "MODEL_ERROR";
 			}
 		} catch (error) {
 			run.metadata.status =
-				run.stopCode === "REQUEST_CANCELLED" || run.stopCode === "SERVICE_SHUTDOWN" ? "cancelled" : "failed";
+				run.stopCode === "REQUEST_CANCELLED" ||
+				run.stopCode === "SERVICE_SHUTDOWN" ||
+				run.stopCode === "SESSION_DELETED"
+					? "cancelled"
+					: "failed";
 			run.metadata.errorCode = run.stopCode ?? (error instanceof AppError ? error.code : "AGENT_ERROR");
 			if (live) {
 				await live.session.abort().catch(() => {});
@@ -456,17 +533,19 @@ export class AgentService {
 		// 结束时先（若已建立 live 会话）把终态 request_state 写入 Pi 分支，再写请求索引；两步非原子，重启恢复以分支终态快照修复索引。
 		try {
 			run.metadata.updatedAt = new Date().toISOString();
+			// execute 可能持有重命名前读取的元数据；结束时重新读取，避免覆盖并发保存的手动标题。
+			const latest = this.store.readSession(metadata.ownerId, metadata.sessionId);
 			if (live) {
 				live.manager.appendCustomEntry("pcb.request_state", { ...run.metadata });
-				metadata.hasConversation = live.manager
+				latest.hasConversation = live.manager
 					.getBranch()
 					.some((entry) => entry.type === "message" && entry.message.role === "user");
-				metadata.updatedAt = run.metadata.updatedAt;
+				latest.updatedAt = run.metadata.updatedAt;
 				live.lastUsed = Date.now();
-				this.store.writeSession(metadata);
+				this.store.writeSession(latest);
 			}
-			this.store.writeRequest(metadata.ownerId, metadata.sessionId, run.metadata);
-			result = this.project(metadata, run.metadata, live?.manager.getBranch());
+			this.store.writeRequest(latest.ownerId, latest.sessionId, run.metadata);
+			result = this.project(latest, run.metadata, live?.manager.getBranch());
 		} catch {
 			run.metadata.status = "interrupted";
 			result = {
@@ -519,6 +598,36 @@ export class AgentService {
 		await Promise.allSettled(this.registry.pending.values());
 		this.registry.dispose();
 	}
+}
+// 从首个提问提取第一句话；常见小数点两侧均为数字时不提前截断。
+function titleFromMessage(message: string): string {
+	const characters = Array.from(message.trim());
+	let end = characters.length;
+	for (let index = 0; index < characters.length; index++) {
+		const character = characters[index];
+		if (
+			character === "\n" ||
+			character === "。" ||
+			character === "！" ||
+			character === "？" ||
+			character === "!" ||
+			character === "?"
+		) {
+			end = index;
+			break;
+		}
+		if (character === "." && /\d/.test(characters[index - 1] ?? "") && /\d/.test(characters[index + 1] ?? "")) {
+			continue;
+		}
+		if (character === ".") {
+			end = index;
+			break;
+		}
+	}
+	const sentence = characters.slice(0, end).join("").trim();
+	const source = sentence || characters.join("");
+	const title = Array.from(source).slice(0, 20).join("");
+	return source.length > title.length ? `${title}…` : title;
 }
 // Pi 消息内容可能是纯字符串或多段内容；这里只提取文本段供业务协议使用。
 function textOf(message: { content?: unknown }): string {

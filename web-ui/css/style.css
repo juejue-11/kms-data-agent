@@ -117,20 +117,53 @@ body {
 .session-empty { padding: 8px 12px; color: rgba(255, 255, 255, 0.35); font-size: 12px; line-height: 1.5; }
 .session-item {
     display: flex;
-    flex-direction: column;
-    gap: 3px;
+    align-items: stretch;
+    gap: 4px;
     width: 100%;
-    border: 0;
     border-radius: 7px;
-    padding: 8px 10px;
+    padding: 0;
     background: transparent;
     color: rgba(255, 255, 255, 0.72);
-    cursor: pointer;
     font-family: inherit;
     text-align: left;
 }
 .session-item:hover { background: rgba(255, 255, 255, 0.06); color: #fff; }
 .session-item.active { background: rgba(199, 164, 92, 0.15); color: #fff; }
+.session-item-main {
+    display: flex;
+    min-width: 0;
+    flex: 1;
+    flex-direction: column;
+    gap: 3px;
+    padding: 8px 6px 8px 10px;
+    border: 0;
+    background: transparent;
+    color: inherit;
+    cursor: pointer;
+    font: inherit;
+    text-align: left;
+}
+.session-item-main:focus-visible,
+.session-action:focus-visible { outline: 2px solid var(--gold-400); outline-offset: -2px; }
+.session-item-actions {
+    display: flex;
+    align-items: center;
+    gap: 2px;
+    padding-right: 5px;
+}
+.session-action {
+    padding: 3px 4px;
+    border: 0;
+    background: transparent;
+    color: rgba(255, 255, 255, 0.42);
+    cursor: pointer;
+    font: inherit;
+    font-size: 10px;
+    white-space: nowrap;
+}
+.session-action:hover { color: var(--gold-400); }
+.session-action:disabled { cursor: not-allowed; opacity: 0.45; }
+.session-delete-action:hover { color: #F0A0A0; }
 .session-item-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12.5px; }
 .session-item-meta { color: rgba(255, 255, 255, 0.38); font-size: 10.5px; }
 .session-item-status { color: var(--gold-400); }
@@ -155,10 +188,45 @@ body {
 .main { flex: 1; min-width: 0; display: flex; flex-direction: column; background: var(--bg); }
 
 .topbar { display: flex; align-items: center; justify-content: space-between; gap: 20px; padding: 18px 28px; background: var(--surface); border-bottom: 1px solid var(--line); }
-.topbar-title { font-size: 18px; font-weight: 600; }
+.topbar-title { font-size: 18px; font-weight: 600; overflow-wrap: anywhere; }
 .topbar-sub { font-size: 13px; color: var(--muted); margin-top: 4px; }
 .run-status { min-height: 16px; margin-top: 4px; color: var(--muted); font-size: 12px; }
 .run-status.error { color: #A33A3A; }
+
+/* 会话操作使用原生模态框，遮罩期间背景不能操作且不会因点击遮罩关闭。 */
+.session-dialog {
+    width: min(420px, calc(100vw - 40px));
+    margin: auto;
+    padding: 0;
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    color: var(--text);
+    background: var(--surface);
+    box-shadow: 0 18px 50px rgba(12, 32, 56, 0.28);
+}
+.session-dialog::backdrop { background: rgba(12, 32, 56, 0.52); }
+.session-dialog-content { padding: 24px; }
+.session-dialog-content h2 { margin: 0; color: var(--navy-900); font-size: 17px; }
+.session-dialog-content p { margin: 12px 0 22px; color: var(--muted); font-size: 13.5px; line-height: 1.6; overflow-wrap: anywhere; }
+.session-dialog-actions { display: flex; justify-content: flex-end; gap: 9px; }
+.session-title-label { display: block; margin: 16px 0 8px; color: var(--muted); font-size: 13px; }
+.session-title-input { width: 100%; padding: 9px 10px; border: 1px solid var(--line-strong); border-radius: 6px; color: var(--text); font: inherit; font-size: 14px; }
+.session-title-input:focus { outline: 2px solid var(--gold-500); outline-offset: 1px; }
+.session-dialog-content .session-dialog-error { min-height: 20px; margin: 8px 0 12px; color: #A33A3A; font-size: 12px; }
+.dialog-button {
+    padding: 8px 16px;
+    border-radius: 8px;
+    cursor: pointer;
+    font: inherit;
+    font-size: 13px;
+}
+.dialog-button-secondary { border: 1px solid var(--line-strong); color: var(--text); background: var(--surface); }
+.dialog-button-secondary:hover { background: #F5F8FC; }
+.dialog-button-primary { border: 1px solid var(--gold-500); color: var(--navy-950); background: var(--gold-500); }
+.dialog-button-primary:hover { background: var(--gold-400); }
+.dialog-button-danger { border: 1px solid #B24A4A; color: #fff; background: #B24A4A; }
+.dialog-button-danger:hover { background: #963C3C; }
+.dialog-button:disabled { cursor: not-allowed; opacity: 0.55; }
 
 .chat-box {
     flex: 1;
