@@ -19,6 +19,10 @@ class FakeClassList {
 		for (const name of names) this.values.add(name);
 	}
 
+	contains(name: string): boolean {
+		return this.values.has(name);
+	}
+
 	toggle(name: string, force?: boolean): boolean {
 		const enabled = force === undefined ? !this.values.has(name) : force;
 		if (enabled) this.values.add(name);
@@ -36,6 +40,8 @@ class FakeElement {
 	disabled = false;
 	hidden = false;
 	open = false;
+	matches = false;
+	content?: { firstElementChild: FakeElement };
 	scrollTop = 0;
 	scrollHeight = 0;
 	readonly dataset: Record<string, string> = {};
@@ -44,6 +50,29 @@ class FakeElement {
 	readonly children: FakeElement[] = [];
 	private parent: FakeElement | null = null;
 	private readonly listeners = new Map<string, (...args: unknown[]) => void>();
+	private readonly ownerDocument?: FakeDocument;
+
+	constructor(ownerDocument?: FakeDocument) {
+		this.ownerDocument = ownerDocument;
+	}
+
+	focus(): void {
+		if (this.ownerDocument) this.ownerDocument.activeElement = this;
+	}
+
+	contains(node: unknown): boolean {
+		return node === this || this.children.some((child) => child.contains(node));
+	}
+
+	cloneNode(deep: boolean): FakeElement {
+		const clone = new FakeElement(this.ownerDocument);
+		clone.id = this.id;
+		clone.className = this.className;
+		clone.textContent = this.textContent;
+		Object.assign(clone.dataset, this.dataset);
+		if (deep) for (const child of this.children) clone.appendChild(child.cloneNode(true));
+		return clone;
+	}
 
 	appendChild(child: FakeElement): FakeElement {
 		child.parent = this;
@@ -65,13 +94,21 @@ class FakeElement {
 	}
 
 	querySelector(selector: string): FakeElement | null {
-		const className = selector.startsWith(".") ? selector.slice(1) : "";
+		return this.querySelectorAll(selector)[0] || null;
+	}
+
+	querySelectorAll(selector: string): FakeElement[] {
+		const result: FakeElement[] = [];
 		for (const child of this.children) {
-			if (className && child.className.split(/\s+/).includes(className)) return child;
-			const nested = child.querySelector(selector);
-			if (nested) return nested;
+			if (
+				(selector.startsWith(".") && child.className.split(/\s+/).includes(selector.slice(1))) ||
+				(selector.startsWith("#") && child.id === selector.slice(1)) ||
+				(selector === "[data-question]" && child.dataset.question)
+			)
+				result.push(child);
+			result.push(...child.querySelectorAll(selector));
 		}
-		return null;
+		return result;
 	}
 
 	setAttribute(name: string, value: string): void {
@@ -87,6 +124,19 @@ class FakeElement {
 		this.open = false;
 	}
 
+	// 原生弹出层只影响绘制层级，行为测试保留其开启/关闭状态即可。
+	showPopover(): void {
+		this.open = true;
+	}
+
+	hidePopover(): void {
+		this.open = false;
+	}
+
+	getBoundingClientRect(): { top: number; bottom: number; right: number; width: number; height: number } {
+		return { top: 100, bottom: 130, right: 240, width: 116, height: 80 };
+	}
+
 	trigger(type: string, event: Record<string, unknown> = {}): void {
 		this.listeners.get(type)?.(event);
 	}
@@ -96,22 +146,27 @@ class FakeElement {
 	}
 }
 
-class FakeDocument {
+class FakeDocument extends FakeElement {
 	private readonly elements = new Map<string, FakeElement>();
+	activeElement: FakeElement | null = null;
 
 	register(id: string): FakeElement {
-		const element = new FakeElement();
+		const element = new FakeElement(this);
 		element.id = id;
 		this.elements.set(id, element);
 		return element;
 	}
 
 	getElementById(id: string): FakeElement | null {
-		return this.elements.get(id) || null;
+		return this.elements.get(id) || this.elements.get("chat-box")?.querySelector(`#${id}`) || null;
 	}
 
 	createElement(_tagName: string): FakeElement {
-		return new FakeElement();
+		return new FakeElement(this);
+	}
+
+	createElementNS(_namespace: string, tagName: string): FakeElement {
+		return this.createElement(tagName);
 	}
 
 	createTextNode(text: string): FakeElement {
@@ -158,6 +213,7 @@ class StubApi {
 }
 
 type WebHarness = {
+	document: FakeDocument;
 	api: StubApi;
 	controller: UnknownRecord;
 	state: UnknownRecord;
@@ -180,6 +236,15 @@ type WebHarness = {
 async function loadWebHarness(): Promise<WebHarness> {
 	const document = new FakeDocument();
 	for (const id of [
+		"app-shell",
+		"sidebar",
+		"workspace-main",
+		"sidebar-collapse-btn",
+		"sidebar-expand-btn",
+		"sidebar-backdrop",
+		"welcome-template",
+		"knowledge-status",
+		"knowledge-status-text",
 		"send-btn",
 		"stop-btn",
 		"user-input",
@@ -205,6 +270,17 @@ async function loadWebHarness(): Promise<WebHarness> {
 		"session-rename-save",
 	])
 		document.register(id);
+	// 测试替身复用真实模板中的问题文本，确保入口发送的内容与页面一致。
+	const html = await readFile(new URL("../../web-ui/index.html", import.meta.url), "utf8");
+	const welcome = document.createElement("section");
+	welcome.id = "welcome-message";
+	welcome.className = "welcome";
+	for (const match of html.matchAll(/data-question="([^"]+)"/g)) {
+		const button = document.createElement("button");
+		button.dataset.question = match[1];
+		welcome.appendChild(button);
+	}
+	document.getElementById("welcome-template")!.content = { firstElementChild: welcome };
 	const api = new StubApi();
 	const timerCallbacks: Array<() => void> = [];
 	const context: Record<string, unknown> = {
@@ -222,6 +298,7 @@ async function loadWebHarness(): Promise<WebHarness> {
 			},
 		},
 		AbortController,
+		matchMedia: () => new FakeElement(document),
 		renderMarkdown: (text: string) => {
 			const node = new FakeElement();
 			node.textContent = String(text);
@@ -272,11 +349,13 @@ async function loadWebHarness(): Promise<WebHarness> {
 		}
 	}
 	context.PcbApi = PcbApi;
+	vm.runInNewContext(await readFile(new URL("../../web-ui/js/workspace.js", import.meta.url), "utf8"), context);
 	const source = await readFile(new URL("../../web-ui/js/script.js", import.meta.url), "utf8");
 	vm.runInNewContext(source, context, { filename: "web-ui/js/script.js" });
 	await new Promise<void>((resolve) => setImmediate(resolve));
 	const controller = context.window as UnknownRecord;
 	return {
+		document,
 		api,
 		controller: controller.PcbClientController as UnknownRecord,
 		state: (controller.PcbClientController as UnknownRecord).state as UnknownRecord,
@@ -746,4 +825,121 @@ test("browser preserves the draft instead of sending into a session being delete
 	sessions = [];
 	completeDelete({ sessionId: "s1", deleted: true });
 	await deletion;
+});
+
+// 四个欢迎入口都直接走既有请求接口；首问后整个欢迎区域消失，新会话再恢复。
+test("browser sends each welcome question and restores welcome only for an empty session", async () => {
+	for (let index = 0; index < 4; index++) {
+		const harness = await loadWebHarness();
+		const welcome = harness.chatBox.querySelector(".welcome")!;
+		const examples = welcome.querySelectorAll("[data-question]");
+		assert.equal(examples.length, 4);
+		let sent = "";
+		harness.api.sendMessage = async (_sessionId, options) => {
+			sent = options.message || "";
+			return { kind: "stream", status: 200, final: { status: "succeeded", reply: "分析完成" }, lastEvent: null };
+		};
+		examples[index].trigger("click");
+		await new Promise<void>((resolve) => setImmediate(resolve));
+		assert.equal(sent, examples[index].dataset.question);
+		assert.equal(harness.chatBox.querySelector(".welcome"), null);
+		assert.equal(harness.chatBox.querySelectorAll(".user-message").length, 1);
+		assert.match(elementText(harness.chatBox), /分析完成/);
+		await (harness.controller.createSession as () => Promise<void>)();
+		assert.ok(harness.chatBox.querySelector(".welcome"));
+		assert.equal(harness.chatBox.querySelectorAll(".message").length, 0);
+	}
+});
+
+// 日期采用本地自然日；菜单通过鼠标或键盘打开，重命名只打开原有弹窗。
+test("browser groups sessions by calendar day and operates the keyboard accessible menu", async () => {
+	const harness = await loadWebHarness();
+	const today = new Date();
+	const yesterday = new Date(today);
+	yesterday.setDate(today.getDate() - 1);
+	const earlier = new Date(today);
+	earlier.setDate(today.getDate() - 3);
+	harness.api.listSessions = async () => ({
+		sessions: [
+			{ sessionId: "old", title: "早期排查", updatedAt: earlier.toISOString() },
+			{ sessionId: "today", title: "今日排查", updatedAt: today.toISOString() },
+			{ sessionId: "yesterday", title: "昨日排查", createdAt: yesterday.toISOString() },
+		],
+	});
+	await (harness.controller.refreshSessions as (options: UnknownRecord) => Promise<boolean>)({
+		preserveSelection: true,
+	});
+	const groups = harness.sessionList.querySelectorAll(".session-group");
+	assert.deepEqual(
+		groups.map((group) => group.querySelector(".session-group-heading")!.textContent),
+		["今天", "昨天", "更早"],
+	);
+	assert.match(elementText(groups[0]), /今日排查/);
+	assert.match(elementText(groups[1]), /昨日排查/);
+	assert.match(elementText(groups[2]), /早期排查/);
+	assert.doesNotMatch(elementText(harness.sessionList), /待机|运行中/);
+	const toggle = groups[0].querySelector(".session-menu-toggle")!;
+	const menu = groups[0].querySelector(".session-menu")!;
+	assert.equal(menu.hidden, true);
+	toggle.trigger("click");
+	assert.equal(menu.hidden, false);
+	assert.equal(harness.document.activeElement, menu.children[0]);
+	menu.trigger("keydown", { key: "ArrowDown", preventDefault() {} });
+	assert.equal(harness.document.activeElement, menu.children[1]);
+	harness.document.trigger("keydown", { key: "Escape" });
+	assert.equal(menu.hidden, true);
+	assert.equal(harness.document.activeElement, toggle);
+	toggle.trigger("click");
+	menu.children[0].trigger("click");
+	assert.equal(harness.renameDialog.open, true);
+	assert.equal(harness.renameInput.value, "今日排查");
+	assert.equal(menu.hidden, true);
+});
+
+// 折叠/展开可逆；知识库状态只由检索事件更新，不根据会话连接伪报在线。
+test("browser toggles the sidebar and reports knowledge retrieval state from actual events", async () => {
+	const harness = await loadWebHarness();
+	const shell = harness.document.getElementById("app-shell")!;
+	harness.document.getElementById("sidebar-collapse-btn")!.trigger("click");
+	assert.equal(shell.classList.contains("sidebar-collapsed"), true);
+	assert.equal(harness.document.getElementById("sidebar-expand-btn")!.hidden, false);
+	harness.document.getElementById("sidebar-expand-btn")!.trigger("click");
+	assert.equal(shell.classList.contains("sidebar-collapsed"), false);
+	assert.equal(harness.document.getElementById("sidebar-expand-btn")!.hidden, true);
+	await (harness.controller.selectSession as (sessionId: string) => Promise<void>)("s1");
+	harness.api.sendMessage = async (_sessionId, options) => {
+		options.onEvent?.({ type: "tool_started", payload: { backend: "ragflow" } });
+		assert.equal(harness.document.getElementById("knowledge-status")!.dataset.state, "checking");
+		options.onEvent?.({
+			type: "tool_completed",
+			payload: { toolName: "search_knowledge_base", backend: "local", status: "degraded" },
+		});
+		assert.equal(harness.document.getElementById("knowledge-status")!.dataset.state, "degraded");
+		options.onEvent?.({ type: "tool_completed", payload: { backend: "ragflow", status: "failed" } });
+		assert.equal(harness.document.getElementById("knowledge-status")!.dataset.state, "offline");
+		options.onEvent?.({ type: "tool_completed", payload: { backend: "ragflow", status: "ok" } });
+		return { kind: "stream", status: 200, final: { status: "succeeded", reply: "完成" }, lastEvent: null };
+	};
+	harness.input.value = "排查孔铜异常";
+	await (harness.controller.sendMessage as () => Promise<void>)();
+	assert.equal(harness.document.getElementById("knowledge-status")!.dataset.state, "connected");
+});
+
+// 输入法确认候选词和 Shift+Enter 不发送，普通 Enter 只发送一次。
+test("browser preserves IME composition and multiline input before sending with Enter", async () => {
+	const harness = await loadWebHarness();
+	await (harness.controller.selectSession as (sessionId: string) => Promise<void>)("s1");
+	let sends = 0;
+	harness.api.sendMessage = async () => {
+		sends++;
+		return { kind: "stream", status: 200, final: { status: "succeeded", reply: "完成" }, lastEvent: null };
+	};
+	harness.input.value = "线路异常";
+	harness.input.trigger("keydown", { key: "Enter", isComposing: true });
+	harness.input.trigger("keydown", { key: "Enter", shiftKey: true });
+	assert.equal(sends, 0);
+	assert.equal(harness.input.value, "线路异常");
+	harness.input.trigger("keydown", { key: "Enter", preventDefault() {} });
+	await new Promise<void>((resolve) => setImmediate(resolve));
+	assert.equal(sends, 1);
 });

@@ -4,7 +4,6 @@ const sendBtn = document.getElementById("send-btn");
 const stopBtn = document.getElementById("stop-btn");
 const userInput = document.getElementById("user-input");
 const chatBox = document.getElementById("chat-box");
-const sessionList = document.getElementById("session-list");
 const newSessionBtn = document.getElementById("new-session-btn");
 const refreshSessionsBtn = document.getElementById("refresh-sessions-btn");
 const sessionTitle = document.getElementById("session-title");
@@ -26,8 +25,6 @@ const renameSaveBtn = document.getElementById("session-rename-save");
 const SELECTED_SESSION_KEY = "pcb.selectedSessionId";
 const NEW_SESSION_TITLE = "新会话";
 const MAX_SESSION_TITLE_LENGTH = 100;
-const DEFAULT_WELCOME =
-	"你好，我是 PCB 缺陷分析助手。请描述你遇到的异常现象（例如「线路上有开路/短路」「焊盘有绿油残留」），我会帮你定位缺陷类型并标注判定依据。";
 
 const state = {
 	sessionId: null,
@@ -45,6 +42,19 @@ const state = {
 };
 
 const RECONCILE_DELAY_MS = 1500;
+
+const workspace = new window.PcbWorkspace({
+	onSelect: (sessionId) => void selectSession(sessionId),
+	onRename: requestRenameSession,
+	onDelete: requestDeleteSession,
+	sessionTitle: sessionDisplayTitle,
+	onExample: (question) => {
+		// 示例与普通输入共用同一发送路径；繁忙时保留用户草稿。
+		if (state.activeRequest || state.loadingSession || state.creatingSession || state.deletingSessionId) return;
+		userInput.value = question;
+		void sendMessage();
+	},
+});
 
 function isRecord(value) {
 	return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -114,7 +124,9 @@ function setSending(sending) {
 	userInput.disabled = sending;
 	stopBtn.hidden = !sending;
 	stopBtn.disabled = Boolean(state.activeRequest?.cancelling);
-	sendBtn.textContent = sending ? "思考中…" : "发送";
+	sendBtn.dataset.sending = String(sending);
+	sendBtn.setAttribute("aria-label", sending ? "正在生成回答" : "发送消息");
+	chatBox.setAttribute("aria-busy", String(sending));
 }
 
 function currentRequest(request) {
@@ -131,7 +143,7 @@ function clearChat() {
 }
 
 function addWelcome() {
-	addMessage(DEFAULT_WELCOME, "ai-message");
+	workspace.showWelcome();
 }
 
 function messageContent(message) {
@@ -254,6 +266,7 @@ function setMessageStatus(message, status) {
 }
 
 function addMessage(text, className, sources = [], options = {}) {
+	workspace.hideWelcome();
 	const wrap = document.createElement("div");
 	wrap.className = `message ${className}`;
 	if (options.entryId) wrap.dataset.entryId = options.entryId;
@@ -262,7 +275,15 @@ function addMessage(text, className, sources = [], options = {}) {
 
 	const avatar = document.createElement("div");
 	avatar.className = `avatar ${className === "ai-message" ? "ai" : "user"}`;
-	avatar.textContent = className === "ai-message" ? "助" : "我";
+	if (className === "ai-message") {
+		const icon = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+		icon.setAttribute("viewBox", "0 0 32 32");
+		icon.setAttribute("aria-hidden", "true");
+		const use = document.createElementNS("http://www.w3.org/2000/svg", "use");
+		use.setAttribute("href", "#pcb-mark");
+		icon.appendChild(use);
+		avatar.appendChild(icon);
+	} else avatar.textContent = "我";
 	wrap.appendChild(avatar);
 
 	const bubble = document.createElement("div");
@@ -480,7 +501,6 @@ async function sendMessage() {
 
 	const generation = state.viewGeneration;
 	const requestId = makeRequestId();
-	document.getElementById("welcome-message")?.remove();
 	addMessage(text, "user-message", [], { requestId });
 	const assistant = addMessage("", "ai-message", [], { requestId });
 	const request = {
@@ -505,6 +525,7 @@ async function sendMessage() {
 			signal: request.controller.signal,
 			onEvent: (event) => {
 				if (!currentRequest(request)) return;
+				workspace.updateKnowledge(event);
 				if (["request_started", "message_delta", "message_completed", "request_finished"].includes(event?.type))
 					refreshSessionTitleAfterAcceptedRequest(request);
 				const status = eventStatus(event);
@@ -600,78 +621,13 @@ async function stopMessage() {
 	}
 }
 
-function formatSessionDate(value) {
-	if (!value) return "";
-	const date = new Date(value);
-	return Number.isNaN(date.getTime()) ? String(value) : date.toLocaleString();
-}
-
 function renderSessionList() {
-	sessionList.replaceChildren();
-	if (!state.sessions.length) {
-		const empty = document.createElement("div");
-		empty.className = "session-empty";
-		empty.textContent = "暂无会话，点击新建对话开始。";
-		sessionList.appendChild(empty);
-		return;
-	}
-	for (const session of state.sessions) {
-		const item = document.createElement("div");
-		item.className = `session-item${session.sessionId === state.sessionId ? " active" : ""}`;
-		item.setAttribute("role", "listitem");
-
-		const selectButton = document.createElement("button");
-		selectButton.type = "button";
-		selectButton.className = "session-item-main";
-		selectButton.setAttribute("aria-current", session.sessionId === state.sessionId ? "page" : "false");
-		const title = document.createElement("span");
-		title.className = "session-item-title";
-		title.textContent = sessionDisplayTitle(session);
-		selectButton.appendChild(title);
-		const meta = document.createElement("span");
-		meta.className = "session-item-meta";
-		const status = session.activeRequestId ? "运行中" : "待机";
-		const statusText = document.createElement("span");
-		statusText.className = session.activeRequestId ? "session-item-status" : "";
-		statusText.textContent = status;
-		meta.appendChild(statusText);
-		if (session.updatedAt || session.createdAt) {
-			meta.appendChild(document.createTextNode(` · ${formatSessionDate(session.updatedAt || session.createdAt)}`));
-		}
-		selectButton.appendChild(meta);
-		selectButton.addEventListener("click", () => {
-			void selectSession(session.sessionId);
-		});
-		item.appendChild(selectButton);
-
-		const actions = document.createElement("div");
-		actions.className = "session-item-actions";
-		const renameButton = document.createElement("button");
-		renameButton.type = "button";
-		renameButton.className = "session-action";
-		renameButton.textContent = "重命名";
-		renameButton.setAttribute("aria-label", `重命名${sessionDisplayTitle(session)}`);
-		renameButton.disabled = Boolean(state.deletingSessionId || state.renamingSessionId);
-		renameButton.addEventListener("click", () => {
-			requestRenameSession(session.sessionId);
-		});
-		actions.appendChild(renameButton);
-
-		const deleteButton = document.createElement("button");
-		deleteButton.type = "button";
-		deleteButton.className = "session-action session-delete-action";
-		deleteButton.textContent = "删除";
-		deleteButton.setAttribute("aria-label", `删除${sessionDisplayTitle(session)}`);
-		deleteButton.disabled = Boolean(state.deletingSessionId || state.renamingSessionId);
-		deleteButton.addEventListener("click", () => {
-			requestDeleteSession(session.sessionId);
-		});
-		actions.appendChild(deleteButton);
-		item.appendChild(actions);
-		sessionList.appendChild(item);
-	}
+	workspace.renderSessions(
+		state.sessions,
+		state.sessionId,
+		Boolean(state.deletingSessionId || state.renamingSessionId),
+	);
 }
-
 function invalidateActiveRequest() {
 	const previous = state.activeRequest;
 	if (previous) {
@@ -930,6 +886,7 @@ async function deleteSession(sessionId) {
 }
 
 newSessionBtn.addEventListener("click", () => {
+	if (workspace.narrowScreen.matches) workspace.setCollapsed(true);
 	void createSession().catch((error) => {
 		setConnection(false, error.message);
 		setRunStatus(error.message || "创建会话失败", true);
@@ -942,7 +899,7 @@ sendBtn.addEventListener("click", () => void sendMessage());
 stopBtn.addEventListener("click", () => void stopMessage());
 
 userInput.addEventListener("keydown", (event) => {
-	if (event.key === "Enter" && !event.shiftKey) {
+	if (event.key === "Enter" && !event.shiftKey && !event.isComposing) {
 		event.preventDefault();
 		void sendMessage();
 	}
@@ -950,7 +907,7 @@ userInput.addEventListener("keydown", (event) => {
 
 userInput.addEventListener("input", () => {
 	userInput.style.height = "auto";
-	userInput.style.height = `${Math.min(userInput.scrollHeight, 132)}px`;
+	userInput.style.height = `${Math.min(userInput.scrollHeight, 160)}px`;
 });
 
 window.PcbClientController = Object.freeze({
@@ -970,4 +927,5 @@ window.PcbClientController = Object.freeze({
 	makeRequestId,
 });
 
+addWelcome();
 void refreshSessions();

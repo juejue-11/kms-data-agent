@@ -7,35 +7,41 @@
     <link rel="stylesheet" href="css/style.css">
 </head>
 <body>
-    <div class="app">
+    <!-- 共用线性图标保持品牌、导航与消息头像一致。 -->
+    <svg width="0" height="0" aria-hidden="true" style="position:absolute">
+        <defs>
+            <symbol id="pcb-mark" viewBox="0 0 32 32">
+                <rect x="1" y="1" width="30" height="30" rx="8" fill="#D3A457"/>
+                <g stroke="#0B2538" stroke-width="2.2" stroke-linecap="round" fill="none"><path d="M8 15h7V8h8M8 24h8v-5h8M24 19v7"/></g>
+                <g fill="#0B2538"><circle cx="8" cy="15" r="2.5"/><circle cx="23" cy="8" r="2.5"/><circle cx="8" cy="24" r="2.5"/><circle cx="24" cy="19" r="2.5"/><circle cx="24" cy="26" r="2.5"/></g>
+            </symbol>
+            <symbol id="icon-panel" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="3"/><path d="M9 4v16m6-11-3 3 3 3"/></symbol>
+            <symbol id="icon-book" viewBox="0 0 24 24"><path d="M12 5c-3-2-6-2-9-1v15c3-1 6-1 9 1 3-2 6-2 9-1V4c-3-1-6-1-9 1Zm0 0v15"/></symbol>
+            <symbol id="icon-nodes" viewBox="0 0 24 24"><circle cx="6" cy="12" r="3"/><circle cx="18" cy="5" r="3"/><circle cx="18" cy="19" r="3"/><path d="m9 10 6-4m-6 8 6 4"/></symbol>
+            <symbol id="icon-document" viewBox="0 0 24 24"><path d="M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9Zm0 0v6h6M8 13h8m-8 4h5"/></symbol>
+            <symbol id="icon-shield" viewBox="0 0 24 24"><path d="m12 3 8 3v6c0 4-4 7-8 9-4-2-8-5-8-9V6Zm-4 9 3 3 5-6"/></symbol>
+            <symbol id="icon-bolt" viewBox="0 0 24 24"><path d="m13 2-9 12h7l-1 8 10-13h-7Z"/></symbol>
+            <symbol id="icon-pad" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8"/><circle cx="12" cy="12" r="3"/><path d="M12 2v2m0 16v2M2 12h2m16 0h2"/></symbol>
+            <symbol id="icon-hole" viewBox="0 0 24 24"><rect x="5" y="3" width="14" height="18" rx="4"/><path d="M9 7h6v10H9Z"/></symbol>
+            <symbol id="icon-layers" viewBox="0 0 24 24"><path d="m12 3 10 5-10 5L2 8Zm-9 9 9 5 9-5M3 16l9 5 9-5"/></symbol>
+            <symbol id="icon-arrow" viewBox="0 0 24 24"><path d="m9 5 7 7-7 7"/></symbol>
+            <symbol id="icon-send" viewBox="0 0 24 24"><path d="m21 3-7 18-4-8-8-4Zm0 0L10 13"/></symbol>
+        </defs>
+    </svg>
+    <div id="app-shell" class="app">
         <!-- 侧边栏 -->
-        <aside class="sidebar">
+        <aside id="sidebar" class="sidebar" aria-label="会话导航">
             <div class="brand">
-                <svg class="brand-mark" viewBox="0 0 32 32" aria-hidden="true">
-                    <rect x="1" y="1" width="30" height="30" rx="7" fill="#C7A45C"/>
-                    <g stroke="#0C2038" stroke-width="2" stroke-linecap="round" fill="none">
-                        <path d="M8 16 H14 V10 H18"/>
-                        <path d="M8 22 H12 V24 H20"/>
-                        <path d="M24 16 H20 V22 H24"/>
-                    </g>
-                    <g fill="#0C2038">
-                        <circle cx="8" cy="16" r="2.6"/>
-                        <circle cx="18" cy="10" r="2.6"/>
-                        <circle cx="8" cy="22" r="2.6"/>
-                        <circle cx="20" cy="24" r="2.6"/>
-                        <circle cx="24" cy="16" r="2.6"/>
-                        <circle cx="24" cy="22" r="2.6"/>
-                    </g>
-                </svg>
+                <svg class="brand-mark" aria-hidden="true"><use href="#pcb-mark"/></svg>
                 <div class="brand-text">
                     <div class="brand-name">PCB 缺陷分析</div>
                     <div class="brand-sub">质量工程助手</div>
                 </div>
+                <button id="sidebar-collapse-btn" class="sidebar-toggle icon-button" type="button" aria-label="折叠会话导航" aria-controls="sidebar" aria-expanded="true" title="折叠会话导航"><svg viewBox="0 0 24 24" aria-hidden="true"><use href="#icon-panel"/></svg></button>
             </div>
 
             <nav class="nav" aria-label="功能">
-                <div class="nav-label">功能</div>
-                <button id="new-session-btn" class="nav-item nav-button" type="button">
+                <button id="new-session-btn" class="nav-button" type="button" aria-label="新建对话" title="新建对话">
                     <svg viewBox="0 0 20 20" width="18" height="18" aria-hidden="true">
                         <path d="M10 3v14M3 10h14" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
                     </svg>
@@ -43,51 +49,105 @@
                 </button>
                 <!-- 列表由服务端返回的本人会话生成，切换时从 Pi 历史恢复消息。 -->
                 <div class="session-heading">
-                    <span>我的会话</span>
-                    <button id="refresh-sessions-btn" class="icon-button" type="button" aria-label="刷新会话列表" title="刷新">↻</button>
+                    <span>对话记录</span>
+                    <button id="refresh-sessions-btn" class="icon-button" type="button" aria-label="刷新会话列表" title="刷新会话列表"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 7v5h-5M4 17v-5h5m11 0a8 8 0 0 0-14-5m-2 5a8 8 0 0 0 14 5"/></svg></button>
                 </div>
                 <div id="session-list" class="session-list" role="list" aria-label="会话列表"></div>
             </nav>
 
             <div class="sidebar-foot">
                 <div class="status">
-                    <span id="connection-dot" class="status-dot"></span>
+                    <span id="connection-dot" class="status-dot" data-state="checking"></span>
                     <div class="status-text">
                         <div id="connection-title" class="status-title">正在连接服务</div>
                         <div id="connection-desc" class="status-desc">会话状态加载中</div>
                     </div>
                 </div>
-                <div class="version">内部工具 · 会话版</div>
             </div>
         </aside>
+        <button id="sidebar-backdrop" class="sidebar-backdrop" type="button" aria-label="收起会话导航" hidden></button>
 
         <!-- 主区 -->
-        <main class="main">
+        <main id="workspace-main" class="main">
             <header class="topbar">
-                <div>
-                    <div id="session-title" class="topbar-title">缺陷定位对话</div>
-                    <div id="run-status" class="run-status" aria-live="polite"></div>
-                </div>
-                <div class="topbar-sub">依据知识库与联网检索结果作答，并标注出处</div>
-            </header>
-
-            <div id="chat-box" class="chat-box">
-                <div id="welcome-message" class="message ai-message">
-                    <div class="avatar ai">助</div>
-                    <div class="bubble">
-                        <div class="msg-text">你好，我是 PCB 缺陷分析助手。请描述你遇到的异常现象（例如「线路上有开路/短路」「焊盘有绿油残留」），我会帮你定位缺陷类型并标注判定依据。</div>
+                <div class="topbar-leading">
+                    <button id="sidebar-expand-btn" class="icon-button" type="button" aria-label="展开会话导航" aria-controls="sidebar" aria-expanded="false" title="展开会话导航" hidden><svg viewBox="0 0 24 24" aria-hidden="true"><use href="#icon-panel"/></svg></button>
+                    <div class="topbar-title-block">
+                        <div id="session-title" class="topbar-title">新会话</div>
+                        <div id="run-status" class="run-status" role="status"></div>
                     </div>
                 </div>
-            </div>
+                <div id="knowledge-status" class="knowledge-status" data-state="checking" role="status" title="显示最近一次知识库检索状态"><span class="knowledge-status-dot"></span><span id="knowledge-status-text">知识库 · 待检索</span></div>
+            </header>
 
-            <div class="input-area">
-                <textarea id="user-input" rows="1" placeholder="描述异常现象，Enter 发送，Shift+Enter 换行"></textarea>
-                <!-- 仅在存在当前请求时显示；停止动作通过请求 ID 定位，不影响其他会话。 -->
-                <button id="stop-btn" class="stop-btn" type="button" hidden>停止</button>
-                <button id="send-btn" type="button">发送</button>
+            <div id="chat-box" class="chat-box" role="region" aria-label="对话内容" tabindex="0"></div>
+
+            <div class="composer-region">
+                <div class="input-area">
+                    <textarea id="user-input" rows="2" aria-label="描述 PCB 异常现象" placeholder="描述你遇到的 PCB 异常现象…"></textarea>
+                    <div class="composer-toolbar">
+                        <span class="composer-hint">Enter 发送，Shift + Enter 换行</span>
+                        <div class="composer-actions">
+                            <!-- 停止仍通过当前请求 ID 定位，避免影响其他会话。 -->
+                            <button id="stop-btn" class="stop-btn" type="button" hidden>停止生成</button>
+                            <button id="send-btn" type="button" aria-label="发送消息" title="发送消息"><svg viewBox="0 0 24 24" aria-hidden="true"><use href="#icon-send"/></svg></button>
+                        </div>
+                    </div>
+                </div>
+                <p class="composer-note">描述缺陷位置、外观与发生工序，有助于更准确地排查。</p>
             </div>
         </main>
     </div>
+    <!-- 空会话复用同一欢迎模板，发送首问后整体移除，不与消息流混排。 -->
+    <template id="welcome-template">
+        <section id="welcome-message" class="welcome" aria-labelledby="welcome-heading">
+            <div class="welcome-card">
+                <div class="welcome-main">
+                    <div class="welcome-copy">
+                        <h1 id="welcome-heading">你好，我是<br>PCB 缺陷分析助手</h1>
+                        <p>从异常现象出发，协助你定位缺陷、排查原因。<br>结合行业标准与工艺知识，让每一次质量判断有据可循。</p>
+                    </div>
+                    <!-- 矢量 PCB 分层插画与产品线路标识保持一致，无需外部图片依赖。 -->
+                    <svg class="pcb-illustration" viewBox="0 0 340 260" fill="none" aria-hidden="true">
+                        <defs>
+                            <linearGradient id="board-fill" x1="60" y1="100" x2="280" y2="240" gradientUnits="userSpaceOnUse"><stop stop-color="#244C64"/><stop offset="1" stop-color="#0B2538"/></linearGradient>
+                            <linearGradient id="chip-fill" x1="130" y1="70" x2="220" y2="160" gradientUnits="userSpaceOnUse"><stop stop-color="#F0D49F"/><stop offset="1" stop-color="#C99848"/></linearGradient>
+                        </defs>
+                        <path d="m28 185 137-78 151 83-138 79Z" fill="#E9EEF4"/>
+                        <path d="m28 167 137-78 151 83-138 79Z" fill="url(#board-fill)"/>
+                        <path d="m28 167 150 84v9L28 176Z" fill="#14354B"/><path d="m178 251 138-79v9l-138 79Z" fill="#082033"/>
+                        <g stroke="#7B9CA7" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round">
+                            <path d="m55 166 39-22 31 17-24 14 33 19m-53-12 16-9m-31 1 20 11m55 38 28-16 27 15 40-23m-86 33 25-15m-41-9 29-16m57-7 24-14 32 18m-12-31-31 18-15-8m44 38-24-14-15 9m-71-94-30 17m46-8 19-11 28 16m-22 68 20 11 20-11"/>
+                        </g>
+                        <g fill="#D8B778"><ellipse cx="55" cy="166" rx="4" ry="2.5"/><ellipse cx="134" cy="194" rx="4" ry="2.5"/><ellipse cx="141" cy="223" rx="4" ry="2.5"/><ellipse cx="236" cy="205" rx="4" ry="2.5"/><ellipse cx="272" cy="178" rx="4" ry="2.5"/><ellipse cx="147" cy="125" rx="4" ry="2.5"/><ellipse cx="253" cy="145" rx="4" ry="2.5"/></g>
+                        <path d="m66 117 98-56 111 62-99 57Z" fill="#EEF3F9" fill-opacity=".7" stroke="#C9D6E2"/>
+                        <path d="m66 87 98-56 111 62-99 57Z" fill="#F6F9FC" fill-opacity=".65" stroke="#D8E2EB"/>
+                        <path d="m111 91 54-31 64 36-55 32Z" fill="#F8E8C8" fill-opacity=".65" stroke="#D3A457"/>
+                        <path d="m117 88 48-27 58 32-49 28Z" fill="url(#chip-fill)"/>
+                        <path d="m117 88 57 33v9l-57-32Z" fill="#BB8C40"/><path d="m174 121 49-28v9l-49 28Z" fill="#D0A253"/>
+                        <path d="m155 90 11-6 13 7-11 7Z" fill="#FFF6E1"/>
+                        <g stroke="#D3A457" stroke-dasharray="3 5" opacity=".55"><path d="M66 87v30m209-24v30M176 150v30"/></g>
+                        <g fill="#D6E1EB"><ellipse cx="76" cy="71" rx="4" ry="2"/><ellipse cx="261" cy="64" rx="4" ry="2"/><ellipse cx="295" cy="126" rx="4" ry="2"/></g>
+                    </svg>
+                </div>
+                <div class="capabilities">
+                    <div class="capability"><svg viewBox="0 0 24 24" aria-hidden="true"><use href="#icon-book"/></svg><span>行业标准<br>与工艺知识</span></div>
+                    <div class="capability"><svg viewBox="0 0 24 24" aria-hidden="true"><use href="#icon-nodes"/></svg><span>多维排查<br>可能根因</span></div>
+                    <div class="capability"><svg viewBox="0 0 24 24" aria-hidden="true"><use href="#icon-document"/></svg><span>针对性<br>改善建议</span></div>
+                    <div class="capability"><svg viewBox="0 0 24 24" aria-hidden="true"><use href="#icon-shield"/></svg><span>判定依据<br>与来源引用</span></div>
+                </div>
+            </div>
+            <div class="suggestions">
+                <h2>从一个具体问题开始</h2>
+                <div class="suggestion-grid">
+                    <button class="suggestion-card" type="button" data-question="PCB 板上出现线路开路或短路，可能的原因有哪些？应该如何排查和改善？"><span class="suggestion-icon" data-tone="amber"><svg viewBox="0 0 24 24" aria-hidden="true"><use href="#icon-bolt"/></svg></span><span class="suggestion-copy"><strong>线路开路 / 短路</strong><span>排查线路异常的可能原因与改善措施</span></span><svg class="suggestion-arrow" viewBox="0 0 24 24" aria-hidden="true"><use href="#icon-arrow"/></svg></button>
+                    <button class="suggestion-card" type="button" data-question="如何判定焊盘绿油残留？需要哪些依据，常见的成因和改善措施是什么？"><span class="suggestion-icon" data-tone="green"><svg viewBox="0 0 24 24" aria-hidden="true"><use href="#icon-pad"/></svg></span><span class="suggestion-copy"><strong>焊盘绿油残留</strong><span>了解判定依据与阻焊工艺排查方向</span></span><svg class="suggestion-arrow" viewBox="0 0 24 24" aria-hidden="true"><use href="#icon-arrow"/></svg></button>
+                    <button class="suggestion-card" type="button" data-question="PCB 孔铜偏薄、无铜或破孔的可能原因是什么？如何进行排查和改善？"><span class="suggestion-icon" data-tone="purple"><svg viewBox="0 0 24 24" aria-hidden="true"><use href="#icon-hole"/></svg></span><span class="suggestion-copy"><strong>孔铜异常</strong><span>分析孔铜偏薄、无铜与破孔问题</span></span><svg class="suggestion-arrow" viewBox="0 0 24 24" aria-hidden="true"><use href="#icon-arrow"/></svg></button>
+                    <button class="suggestion-card" type="button" data-question="PCB 分层或起泡的常见原因有哪些？应如何确认根因并制定改善措施？"><span class="suggestion-icon" data-tone="blue"><svg viewBox="0 0 24 24" aria-hidden="true"><use href="#icon-layers"/></svg></span><span class="suggestion-copy"><strong>分层 / 起泡</strong><span>梳理材料、压合与热应力相关因素</span></span><svg class="suggestion-arrow" viewBox="0 0 24 24" aria-hidden="true"><use href="#icon-arrow"/></svg></button>
+                </div>
+            </div>
+        </section>
+    </template>
     <!-- 两种会话操作复用弹窗样式，由 showModal 锁定背景和键盘焦点。 -->
     <dialog id="session-rename-dialog" class="session-dialog" aria-labelledby="session-rename-heading">
         <form id="session-rename-form" class="session-dialog-content">
@@ -115,6 +175,7 @@
     <script src="js/markdown.js"></script>
     <!-- 先加载 HTTP/SSE 客户端，再初始化页面控制器；Markdown 渲染器独立复用。 -->
     <script src="js/client.js"></script>
+    <script src="js/workspace.js"></script>
     <script src="js/script.js"></script>
 </body>
 </html>
