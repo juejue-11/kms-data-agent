@@ -82,9 +82,10 @@
 
             <div id="chat-box" class="chat-box" role="region" aria-label="对话内容" tabindex="0"></div>
 
-            <div class="composer-region">
+            <div id="composer-region" class="composer-region">
+                <button id="jump-to-latest" class="jump-to-latest" type="button" hidden aria-label="跳至最新消息">跳至最新</button>
                 <div class="input-area">
-                    <textarea id="user-input" rows="2" aria-label="描述 PCB 异常现象" placeholder="描述你遇到的 PCB 异常现象…"></textarea>
+                    <textarea id="user-input" rows="1" aria-label="描述 PCB 异常现象" placeholder="描述你遇到的 PCB 异常现象…"></textarea>
                     <div class="composer-toolbar">
                         <span class="composer-hint">Enter 发送，Shift + Enter 换行</span>
                         <div class="composer-actions">

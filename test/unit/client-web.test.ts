@@ -44,6 +44,12 @@ class FakeElement {
 	content?: { firstElementChild: FakeElement };
 	scrollTop = 0;
 	scrollHeight = 0;
+	clientHeight = 0;
+	offsetHeight = 0;
+	lineHeight = "20px";
+	minHeight = "26px";
+	maxHeight = "160px";
+	lastScrollTo: { top: number; behavior?: string } | null = null;
 	readonly dataset: Record<string, string> = {};
 	readonly style: Record<string, string> = {};
 	readonly classList = new FakeClassList();
@@ -141,6 +147,11 @@ class FakeElement {
 		this.listeners.get(type)?.(event);
 	}
 
+	scrollTo(options: { top: number; behavior?: string }): void {
+		this.scrollTop = options.top;
+		this.lastScrollTo = options;
+	}
+
 	addEventListener(type: string, callback: (...args: unknown[]) => void): void {
 		this.listeners.set(type, callback);
 	}
@@ -192,6 +203,22 @@ class FakeStorage {
 	}
 }
 
+class FakeResizeObserver {
+	static latest: FakeResizeObserver | undefined;
+	private readonly callback: () => void;
+
+	constructor(callback: () => void) {
+		this.callback = callback;
+		FakeResizeObserver.latest = this;
+	}
+
+	observe(): void {}
+
+	trigger(): void {
+		this.callback();
+	}
+}
+
 class StubApi {
 	listSessions = async (_options?: UnknownRecord): Promise<UnknownRecord> => ({ sessions: [] });
 	createSession = async (): Promise<UnknownRecord> => ({ sessionId: "seed" });
@@ -218,6 +245,8 @@ type WebHarness = {
 	controller: UnknownRecord;
 	state: UnknownRecord;
 	chatBox: FakeElement;
+	composerRegion: FakeElement;
+	jumpButton: FakeElement;
 	input: FakeElement;
 	sessionList: FakeElement;
 	sessionTitle: FakeElement;
@@ -231,6 +260,7 @@ type WebHarness = {
 	renameError: FakeElement;
 	renameCancel: FakeElement;
 	runTimers: () => void;
+	triggerComposerResize: () => void;
 };
 
 async function loadWebHarness(): Promise<WebHarness> {
@@ -249,6 +279,8 @@ async function loadWebHarness(): Promise<WebHarness> {
 		"stop-btn",
 		"user-input",
 		"chat-box",
+		"composer-region",
+		"jump-to-latest",
 		"session-list",
 		"new-session-btn",
 		"refresh-sessions-btn",
@@ -298,7 +330,9 @@ async function loadWebHarness(): Promise<WebHarness> {
 			},
 		},
 		AbortController,
+		ResizeObserver: FakeResizeObserver,
 		matchMedia: () => new FakeElement(document),
+		getComputedStyle: (element: FakeElement) => ({ lineHeight: element.lineHeight }),
 		renderMarkdown: (text: string) => {
 			const node = new FakeElement();
 			node.textContent = String(text);
@@ -360,6 +394,8 @@ async function loadWebHarness(): Promise<WebHarness> {
 		controller: controller.PcbClientController as UnknownRecord,
 		state: (controller.PcbClientController as UnknownRecord).state as UnknownRecord,
 		chatBox: document.getElementById("chat-box") as FakeElement,
+		composerRegion: document.getElementById("composer-region") as FakeElement,
+		jumpButton: document.getElementById("jump-to-latest") as FakeElement,
 		input: document.getElementById("user-input") as FakeElement,
 		sessionList: document.getElementById("session-list") as FakeElement,
 		sessionTitle: document.getElementById("session-title") as FakeElement,
@@ -376,8 +412,117 @@ async function loadWebHarness(): Promise<WebHarness> {
 			const callbacks = timerCallbacks.splice(0);
 			for (const callback of callbacks) callback();
 		},
+		triggerComposerResize: () => FakeResizeObserver.latest?.trigger(),
 	};
 }
+
+test("browser follows streaming output only while the viewport is at the bottom", async () => {
+	const harness = await loadWebHarness();
+	harness.chatBox.clientHeight = 100;
+	harness.chatBox.scrollHeight = 400;
+	harness.chatBox.scrollTop = 300;
+	harness.chatBox.trigger("scroll");
+	harness.input.value = "测试流式输出";
+	let streamEvent!: EventHandler;
+	harness.api.sendMessage = async (_sessionId, options) => {
+		streamEvent = options.onEvent!;
+		return new Promise<SendResult>(() => undefined);
+	};
+	const sending = (harness.controller.sendMessage as () => Promise<void>)();
+	await new Promise<void>((resolve) => setImmediate(resolve));
+	assert.equal(harness.chatBox.lastScrollTo?.top, 400);
+	harness.chatBox.scrollTop = 200;
+	harness.chatBox.trigger("scroll");
+	harness.chatBox.lastScrollTo = null;
+	streamEvent({ type: "message_delta", payload: { delta: "继续生成内容" } });
+	assert.equal(harness.chatBox.lastScrollTo, null);
+	assert.equal(harness.jumpButton.hidden, false);
+	assert.equal(harness.state.isFollowing, false);
+	void sending;
+});
+
+test("browser restores streaming follow mode after returning to the bottom or clicking jump button", async () => {
+	const harness = await loadWebHarness();
+	harness.chatBox.clientHeight = 100;
+	harness.chatBox.scrollHeight = 500;
+	harness.chatBox.scrollTop = 250;
+	harness.chatBox.trigger("scroll");
+	assert.equal(harness.state.isFollowing, false);
+	harness.chatBox.scrollTop = 400;
+	harness.chatBox.trigger("scroll");
+	assert.equal(harness.state.isFollowing, true);
+	harness.chatBox.scrollTop = 200;
+	harness.chatBox.trigger("scroll");
+	harness.jumpButton.trigger("click");
+	assert.equal(harness.state.isFollowing, true);
+	assert.equal(harness.chatBox.lastScrollTo?.top, 500);
+	assert.equal(harness.jumpButton.hidden, true);
+});
+
+test("browser grows the message input to its content and caps it with an internal scrollbar", async () => {
+	const harness = await loadWebHarness();
+	harness.input.scrollHeight = 28;
+	harness.input.trigger("input");
+	assert.equal(harness.input.style.height, "28px");
+	assert.equal(harness.input.style.overflowY, "hidden");
+
+	harness.input.scrollHeight = 240;
+	harness.input.trigger("input");
+	assert.equal(harness.input.style.height, "160px");
+	assert.equal(harness.input.style.overflowY, "auto");
+
+	harness.input.scrollHeight = 54;
+	harness.input.trigger("input");
+	assert.equal(harness.input.style.height, "54px");
+	assert.equal(harness.input.style.overflowY, "hidden");
+});
+
+test("browser keeps the jump button in the composer flow above the input area", async () => {
+	const html = await readFile(new URL("../../web-ui/index.html", import.meta.url), "utf8");
+	const composerStart = html.indexOf('<div id="composer-region" class="composer-region">');
+	const jumpIndex = html.indexOf('id="jump-to-latest"', composerStart);
+	const inputIndex = html.indexOf('class="input-area"', composerStart);
+	assert.ok(composerStart >= 0);
+	assert.ok(jumpIndex > composerStart && jumpIndex < inputIndex);
+	const css = await readFile(new URL("../../web-ui/css/style.css", import.meta.url), "utf8");
+	assert.match(css, /\.composer-region\s*\{[^}]*display:\s*flex/s);
+	assert.match(css, /\.jump-to-latest\s*\{[^}]*align-self:\s*center/s);
+});
+
+test("browser makes only the jump button opaque while the composer overlay stays transparent", async () => {
+	const css = await readFile(new URL("../../web-ui/css/style.css", import.meta.url), "utf8");
+	const composerRule = css.match(/\.composer-region\s*\{[^}]*\}/s)?.[0] || "";
+	assert.match(composerRule, /position:\s*absolute/);
+	assert.match(composerRule, /background:\s*transparent/);
+	assert.match(composerRule, /pointer-events:\s*none/);
+	assert.match(
+		css,
+		/\.composer-region\s*>\s*\.jump-to-latest\s*,\s*\.composer-region\s*>\s*\.input-area\s*\{[^}]*pointer-events:\s*auto/s,
+	);
+	const jumpRule = css.match(/\.jump-to-latest\s*\{[^}]*\}/s)?.[0] || "";
+	assert.match(jumpRule, /background:\s*var\(--surface\)/);
+});
+
+test("browser reserves the composer overlay height so the last message stays visible at the bottom", async () => {
+	const harness = await loadWebHarness();
+	harness.chatBox.scrollHeight = 800;
+	harness.chatBox.clientHeight = 200;
+	harness.chatBox.scrollTop = 600;
+	harness.chatBox.lastScrollTo = null;
+	harness.composerRegion.offsetHeight = 180;
+	harness.triggerComposerResize();
+	assert.equal(harness.chatBox.style.paddingBottom, "192px");
+	const scrollToLatest = harness.chatBox.lastScrollTo as { top: number } | null;
+	assert.notEqual(scrollToLatest, null);
+	assert.equal(scrollToLatest?.top, 800);
+
+	harness.chatBox.lastScrollTo = null;
+	harness.state.isFollowing = false;
+	harness.composerRegion.offsetHeight = 320;
+	harness.triggerComposerResize();
+	assert.equal(harness.chatBox.style.paddingBottom, "332px");
+	assert.equal(harness.chatBox.lastScrollTo, null);
+});
 
 function elementText(element: FakeElement): string {
 	return element.textContent + element.children.map((child) => elementText(child)).join("");

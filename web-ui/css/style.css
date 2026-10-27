@@ -593,6 +593,7 @@ select:focus-visible,
 
 .main {
     display: flex;
+    position: relative;
     min-width: 0;
     min-height: 0;
     flex: 1;
@@ -751,6 +752,35 @@ select:focus-visible,
     width: min(100%, var(--content-width));
     margin-right: auto;
     margin-left: auto;
+}
+
+.jump-to-latest {
+    align-self: center;
+    order: 0;
+    margin: 0 auto 8px;
+    min-height: 36px;
+    padding: 0 14px;
+    border: 1px solid var(--line-strong);
+    border-radius: 999px;
+    color: var(--navy-950);
+    background: var(--surface);
+    box-shadow: var(--shadow-float);
+    font-size: 12px;
+    font-weight: 650;
+    transition: color 140ms ease, background 140ms ease, border-color 140ms ease, transform 140ms ease;
+}
+
+.jump-to-latest:hover {
+    border-color: var(--gold-500);
+    background: #fffaf0;
+}
+
+.jump-to-latest:active {
+    transform: translateY(1px);
+}
+
+.jump-to-latest[hidden] {
+    display: none !important;
 }
 
 /* ===== 欢迎工作区 ===== */
@@ -1350,16 +1380,29 @@ select:focus-visible,
 /* ===== 底部输入区 ===== */
 
 .composer-region {
-    flex: 0 0 auto;
+    position: absolute;
+    right: 0;
+    bottom: 0;
+    left: 0;
+    z-index: 5;
+    display: flex;
+    flex-direction: column;
+    align-items: stretch;
+    pointer-events: none;
     padding: 7px clamp(18px, 4vw, 48px) 16px;
-    background: var(--bg);
+    background: transparent;
+}
+
+.composer-region > .jump-to-latest,
+.composer-region > .input-area {
+    pointer-events: auto;
 }
 
 .input-area {
     display: flex;
     width: min(100%, var(--content-width));
     min-width: 0;
-    min-height: 108px;
+    min-height: 0;
     flex-direction: column;
     gap: 0;
     margin: 0 auto;
@@ -1378,9 +1421,9 @@ select:focus-visible,
 #user-input {
     display: block;
     width: 100%;
-    min-height: 44px;
+    min-height: 28px;
     max-height: 160px;
-    flex: 1;
+    flex: 0 0 auto;
     resize: none;
     padding: 1px 1px 0;
     border: 0;
@@ -1389,7 +1432,8 @@ select:focus-visible,
     background: transparent;
     font-size: 14px;
     line-height: 1.6;
-    overflow-y: auto;
+    overflow-y: hidden;
+    transition: height 140ms ease;
 }
 
 #user-input:focus {
@@ -1760,7 +1804,7 @@ select:focus-visible,
     }
 
     .input-area {
-        min-height: 102px;
+        min-height: 0;
         padding: 12px 12px 10px 14px;
         border-radius: 16px;
     }

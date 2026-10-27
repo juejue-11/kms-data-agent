@@ -11,6 +11,7 @@ const runStatus = document.getElementById("run-status");
 const connectionDot = document.getElementById("connection-dot");
 const connectionTitle = document.getElementById("connection-title");
 const connectionDesc = document.getElementById("connection-desc");
+const composerRegion = document.getElementById("composer-region");
 const deleteDialog = document.getElementById("session-delete-dialog");
 const deleteDialogMessage = document.getElementById("session-delete-message");
 const deleteCancelBtn = document.getElementById("session-delete-cancel");
@@ -39,7 +40,15 @@ const state = {
 	pendingDeleteSessionId: null,
 	sessionListGeneration: 0,
 	sessionListVersion: 0,
+	isFollowing: true,
 };
+
+const DEFAULT_LINE_HEIGHT_PX = 20;
+const FOLLOW_THRESHOLD_LINES = 1;
+const JUMP_THRESHOLD_LINES = 3;
+const MIN_INPUT_HEIGHT_PX = 28;
+const MAX_INPUT_HEIGHT_PX = 160;
+const jumpToLatestButton = document.getElementById("jump-to-latest");
 
 const RECONCILE_DELAY_MS = 1500;
 
@@ -140,6 +149,56 @@ function currentRequest(request) {
 
 function clearChat() {
 	chatBox.replaceChildren();
+}
+
+function lineHeightPx() {
+	const value = Number.parseFloat(window.getComputedStyle?.(chatBox)?.lineHeight || "");
+	return Number.isFinite(value) && value > 0 ? value : DEFAULT_LINE_HEIGHT_PX;
+}
+
+function distanceFromBottom() {
+	return Math.max(0, chatBox.scrollHeight - chatBox.clientHeight - chatBox.scrollTop);
+}
+
+function updateJumpToLatestButton() {
+	const distance = distanceFromBottom();
+	if (jumpToLatestButton)
+		jumpToLatestButton.hidden = state.isFollowing || distance <= lineHeightPx() * JUMP_THRESHOLD_LINES;
+}
+
+function updateFollowState() {
+	state.isFollowing = distanceFromBottom() <= lineHeightPx() * FOLLOW_THRESHOLD_LINES;
+	updateJumpToLatestButton();
+}
+
+function scrollToLatest({ restoreFollow = false } = {}) {
+	if (restoreFollow) state.isFollowing = true;
+	if (!state.isFollowing) {
+		updateJumpToLatestButton();
+		return;
+	}
+	chatBox.scrollTo({ top: chatBox.scrollHeight, behavior: "auto" });
+	updateFollowState();
+}
+
+function releaseFollowOnUserInput() {
+	state.isFollowing = false;
+	updateJumpToLatestButton();
+}
+
+function resizeUserInput() {
+	userInput.style.height = "auto";
+	const nextHeight = Math.max(MIN_INPUT_HEIGHT_PX, Math.min(userInput.scrollHeight, MAX_INPUT_HEIGHT_PX));
+	userInput.style.height = `${nextHeight}px`;
+	userInput.style.overflowY = userInput.scrollHeight > MAX_INPUT_HEIGHT_PX ? "auto" : "hidden";
+	updateChatBottomPadding();
+}
+
+function updateChatBottomPadding() {
+	if (!composerRegion) return;
+	const reservedHeight = Math.ceil(composerRegion.offsetHeight) + 12;
+	chatBox.style.paddingBottom = `${reservedHeight}px`;
+	if (state.isFollowing) scrollToLatest();
 }
 
 function addWelcome() {
@@ -306,7 +365,7 @@ function addMessage(text, className, sources = [], options = {}) {
 	wrap.appendChild(bubble);
 	if (className === "ai-message") appendSources(bubble, sources, options.citationValidation);
 	chatBox.appendChild(wrap);
-	chatBox.scrollTop = chatBox.scrollHeight;
+	scrollToLatest();
 	return { wrap, bubble, textNode };
 }
 
@@ -315,7 +374,7 @@ function updateAssistant(message, text, { sources, citationValidation, status } 
 	if (status) message.wrap.dataset.status = status;
 	setMessageStatus(message, status);
 	appendSources(message.bubble, sources, citationValidation);
-	chatBox.scrollTop = chatBox.scrollHeight;
+	scrollToLatest();
 }
 
 function renderHistory(messages) {
@@ -338,7 +397,8 @@ function renderHistory(messages) {
 		});
 	}
 	if (!chatBox.children.length) addWelcome();
-	chatBox.scrollTop = chatBox.scrollHeight;
+	state.isFollowing = true;
+	scrollToLatest({ restoreFollow: true });
 }
 
 function terminalResult(value) {
@@ -516,7 +576,7 @@ async function sendMessage() {
 	};
 	setActiveRequest(request);
 	userInput.value = "";
-	userInput.style.height = "auto";
+	resizeUserInput();
 	setRunStatus("正在请求模型…");
 	try {
 		const result = await api.sendMessage(sessionId, {
@@ -898,6 +958,17 @@ refreshSessionsBtn.addEventListener("click", () => {
 sendBtn.addEventListener("click", () => void sendMessage());
 stopBtn.addEventListener("click", () => void stopMessage());
 
+chatBox.addEventListener("scroll", updateFollowState, { passive: true });
+chatBox.addEventListener("wheel", releaseFollowOnUserInput, { passive: true });
+chatBox.addEventListener("touchstart", releaseFollowOnUserInput, { passive: true });
+chatBox.addEventListener("pointerdown", releaseFollowOnUserInput, { passive: true });
+if (jumpToLatestButton) {
+	jumpToLatestButton.addEventListener("click", () => scrollToLatest({ restoreFollow: true }));
+}
+if (composerRegion && typeof ResizeObserver === "function") {
+	new ResizeObserver(updateChatBottomPadding).observe(composerRegion);
+}
+
 userInput.addEventListener("keydown", (event) => {
 	if (event.key === "Enter" && !event.shiftKey && !event.isComposing) {
 		event.preventDefault();
@@ -906,9 +977,11 @@ userInput.addEventListener("keydown", (event) => {
 });
 
 userInput.addEventListener("input", () => {
-	userInput.style.height = "auto";
-	userInput.style.height = `${Math.min(userInput.scrollHeight, 160)}px`;
+	resizeUserInput();
 });
+
+resizeUserInput();
+updateChatBottomPadding();
 
 window.PcbClientController = Object.freeze({
 	state,
@@ -928,4 +1001,5 @@ window.PcbClientController = Object.freeze({
 });
 
 addWelcome();
+updateFollowState();
 void refreshSessions();
