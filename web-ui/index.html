@@ -26,6 +26,7 @@
             <symbol id="icon-layers" viewBox="0 0 24 24"><path d="m12 3 10 5-10 5L2 8Zm-9 9 9 5 9-5M3 16l9 5 9-5"/></symbol>
             <symbol id="icon-arrow" viewBox="0 0 24 24"><path d="m9 5 7 7-7 7"/></symbol>
             <symbol id="icon-send" viewBox="0 0 24 24"><path d="m21 3-7 18-4-8-8-4Zm0 0L10 13"/></symbol>
+            <symbol id="icon-close" viewBox="0 0 24 24"><path d="m6 6 12 12M18 6 6 18"/></symbol>
         </defs>
     </svg>
     <div id="app-shell" class="app">
@@ -87,6 +88,23 @@
                 <div class="input-area">
                     <textarea id="user-input" rows="1" aria-label="描述 PCB 异常现象" placeholder="描述你遇到的 PCB 异常现象…"></textarea>
                     <div class="composer-toolbar">
+                        <div id="usage-status" class="composer-usage" data-state="idle" role="status" aria-live="polite">
+                            <details class="composer-usage-details">
+                                <summary id="usage-summary">本轮用量</summary>
+                                <div class="composer-usage-popover">
+                                    <dl>
+                                        <div><dt>输入 token</dt><dd id="usage-input">—</dd></div>
+                                        <div><dt>输出 token</dt><dd id="usage-output">—</dd></div>
+                                        <div><dt>缓存读取</dt><dd id="usage-cache-read">—</dd></div>
+                                        <div><dt>缓存写入</dt><dd id="usage-cache-write">—</dd></div>
+                                        <div><dt>总 token</dt><dd id="usage-total">—</dd></div>
+                                        <div><dt>费用</dt><dd id="usage-cost">—</dd></div>
+                                        <div><dt>耗时</dt><dd id="usage-elapsed">—</dd></div>
+                                        <div><dt>模型</dt><dd id="usage-model">—</dd></div>
+                                    </dl>
+                                </div>
+                            </details>
+                        </div>
                         <span class="composer-hint">Enter 发送，Shift + Enter 换行</span>
                         <div class="composer-actions">
                             <!-- 停止仍通过当前请求 ID 定位，避免影响其他会话。 -->
@@ -170,6 +188,25 @@
                 <button id="session-delete-cancel" class="dialog-button dialog-button-secondary" type="button">取消</button>
                 <button id="session-delete-confirm" class="dialog-button dialog-button-danger" type="button">确认删除</button>
             </div>
+        </div>
+    </dialog>
+    <dialog id="evidence-dialog" class="evidence-dialog" aria-labelledby="evidence-preview-title">
+        <div class="evidence-dialog-shell">
+            <header class="evidence-dialog-header">
+                <div class="evidence-dialog-heading">
+                    <span id="evidence-preview-kind" class="badge kb">引用材料</span>
+                    <h2 id="evidence-preview-title">引用材料</h2>
+                </div>
+                <button id="evidence-preview-close" class="icon-button evidence-close" type="button" aria-label="关闭引用预览" title="关闭引用预览">
+                    <svg viewBox="0 0 24 24" aria-hidden="true"><use href="#icon-close"/></svg>
+                </button>
+            </header>
+            <div id="evidence-preview-location" class="evidence-preview-location"></div>
+            <p id="evidence-preview-error" class="evidence-preview-error" role="alert"></p>
+            <div id="evidence-preview-text" class="evidence-preview-text" tabindex="0" aria-live="polite"></div>
+            <footer class="evidence-preview-footer">
+                <a id="evidence-preview-link" class="dialog-button dialog-button-secondary" target="_blank" rel="noopener noreferrer" hidden>打开原始来源</a>
+            </footer>
         </div>
     </dialog>
     <script src="vendor/marked.umd.js"></script>

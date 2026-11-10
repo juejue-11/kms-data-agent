@@ -253,10 +253,15 @@ export function validateCitations(
 }
 
 /** 直接用当前 Pi 活动分支验证最终答案，并返回可供 HTTP 层使用的来源信息。 */
-export function validate(reply: string, entries: readonly PcbHistoryEntry[]): ValidationProjection {
+export function validate(
+	reply: string,
+	entries: readonly PcbHistoryEntry[],
+	requestEntries: readonly PcbHistoryEntry[] = [],
+): ValidationProjection {
 	const result = validateCitations(reply, projectEvidence(entries));
 	return {
-		sources: result.sources,
+		// 未标注引用时仍提供本轮真实检索资料；保留 not_applicable，前端不会将其冒称为已引用依据。
+		sources: result.status === "not_applicable" ? projectSources(projectEvidence(requestEntries)) : result.sources,
 		citationValidation: { status: result.status, invalidIds: result.invalidIds },
 	};
 }

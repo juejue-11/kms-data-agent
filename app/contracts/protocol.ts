@@ -6,6 +6,8 @@ export interface Source {
 	sourceType: "knowledge_base" | "local" | "web";
 	title: string;
 	text?: string;
+	documentId?: string;
+	chunkId?: string;
 	page?: number;
 	url?: string;
 }
@@ -15,11 +17,13 @@ export interface RequestResult {
 	requestId: string;
 	status: RequestStatus;
 	reply: string;
+	/** 已引用的资料；未标注引用（not_applicable）时为本轮实际检索到的资料。 */
 	sources: Source[];
 	citationValidation: { status: "valid" | "invalid" | "not_applicable"; invalidIds: string[] };
 	errorCode?: string;
 	model?: string;
 	usage?: { input: number; output: number; cacheRead: number; cacheWrite: number; totalTokens: number; cost: number };
+	elapsedMs?: number;
 }
 /** sequence 在单次请求内递增，客户端据此过滤重复或过期增量。 */
 export interface BusinessEvent {

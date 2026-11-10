@@ -10,6 +10,7 @@ const ALLOWED_URL_SCHEMES = /^(https?|mailto|tel|ftp)$/i;
 const FENCE_OPEN_REGEX = /^( {0,3})(`{3,}|~{3,})(.*)$/;
 const FENCE_CLOSE_REGEX = /^ {0,3}(`{3,}|~{3,})\s*$/;
 const TABLE_DELIMITER_CELL_REGEX = /^:?-+:?$/;
+const EVIDENCE_CITATION_REGEX = /\[E:(ev_[A-Za-z0-9_-]+)\]/g;
 
 /**
  * 清洗链接地址：去掉控制字符，只放行常见安全协议；相对路径与锚点保持原样。
@@ -102,38 +103,60 @@ function normalizeMarkdown(source) {
 	return output.join("\n");
 }
 
-function appendInline(parent, tokens) {
-	for (const token of tokens || []) appendInlineToken(parent, token);
+function appendInline(parent, tokens, options = {}) {
+	for (const token of tokens || []) appendInlineToken(parent, token, options);
 }
 
-function appendInlineToken(parent, token) {
+function appendCitationText(parent, text) {
+	const value = String(text || "");
+	let cursor = 0;
+	for (const match of value.matchAll(EVIDENCE_CITATION_REGEX)) {
+		const index = match.index ?? 0;
+		if (index > cursor) parent.appendChild(document.createTextNode(value.slice(cursor, index)));
+		const button = document.createElement("button");
+		button.type = "button";
+		button.className = "citation-link";
+		button.dataset.evidenceId = match[1];
+		button.dataset.previewEvidence = "true";
+		button.setAttribute("aria-label", `预览引用材料 ${match[1]}`);
+		button.textContent = match[0];
+		parent.appendChild(button);
+		cursor = index + match[0].length;
+	}
+	if (cursor === 0) parent.appendChild(document.createTextNode(value));
+	else if (cursor < value.length) parent.appendChild(document.createTextNode(value.slice(cursor)));
+}
+
+function appendInlineToken(parent, token, options = {}) {
 	switch (token.type) {
 		case "text":
-			if (token.tokens?.length) appendInline(parent, token.tokens);
-			else parent.appendChild(document.createTextNode(token.text || ""));
+			if (token.tokens?.length) appendInline(parent, token.tokens, options);
+			else if (options.citations === false) parent.appendChild(document.createTextNode(token.text || ""));
+			else appendCitationText(parent, token.text || "");
 			break;
 
 		case "escape":
-			parent.appendChild(document.createTextNode(token.text || ""));
+			if (options.citations === false) parent.appendChild(document.createTextNode(token.text || ""));
+			else appendCitationText(parent, token.text || "");
 			break;
 
 		case "strong": {
 			const strong = document.createElement("strong");
-			appendInline(strong, token.tokens);
+			appendInline(strong, token.tokens, options);
 			parent.appendChild(strong);
 			break;
 		}
 
 		case "em": {
 			const em = document.createElement("em");
-			appendInline(em, token.tokens);
+			appendInline(em, token.tokens, options);
 			parent.appendChild(em);
 			break;
 		}
 
 		case "del": {
 			const del = document.createElement("del");
-			appendInline(del, token.tokens);
+			appendInline(del, token.tokens, options);
 			parent.appendChild(del);
 			break;
 		}
@@ -157,7 +180,7 @@ function appendInlineToken(parent, token) {
 			link.target = "_blank";
 			link.rel = "noopener noreferrer";
 			if (token.title) link.title = token.title;
-			if (token.tokens?.length) appendInline(link, token.tokens);
+			if (token.tokens?.length) appendInline(link, token.tokens, { citations: false });
 			else link.textContent = token.text || href;
 			parent.appendChild(link);
 			break;
@@ -188,8 +211,11 @@ function appendInlineToken(parent, token) {
 			break;
 
 		default:
-			if (token.tokens?.length) appendInline(parent, token.tokens);
-			else if (typeof token.text === "string") parent.appendChild(document.createTextNode(token.text));
+			if (token.tokens?.length) appendInline(parent, token.tokens, options);
+			else if (typeof token.text === "string") {
+				if (options.citations === false) parent.appendChild(document.createTextNode(token.text));
+				else appendCitationText(parent, token.text);
+			}
 	}
 }
 

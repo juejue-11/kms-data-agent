@@ -411,6 +411,83 @@ test("empty sessions restore explicitly; damaged nonempty Pi history is rejected
 	}
 });
 
+test("HTTP evidence preview returns the full source only to the owning visitor", async () => {
+	const env = await setup();
+	const server = createHttpServer(env.service, env.root);
+	await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+	const address = server.address();
+	assert.ok(address && typeof address === "object");
+	const base = `http://127.0.0.1:${address.port}`;
+	try {
+		const created = await fetch(`${base}/api/sessions`, { method: "POST" });
+		const cookie = created.headers.get("set-cookie")!.split(";")[0];
+		const ownerId = cookie.slice("pcb_identity=".length).split(".")[0]!;
+		const session = (await created.json()) as { sessionId: string };
+		env.harness.setResponses([fauxAssistantMessage("已准备测试会话")]);
+		await finish(
+			env.service.submit(ownerId, session.sessionId, { requestId: randomUUID(), message: "准备引用预览" }),
+		);
+		const manager = env.service.registry.instances.get(session.sessionId)!.manager;
+		manager.appendMessage({
+			role: "toolResult",
+			toolCallId: "call-preview",
+			toolName: "search_knowledge_base",
+			content: [{ type: "text", text: "证据检索结果" }],
+			details: {
+				kind: "pcb_evidence",
+				version: 1,
+				toolName: "search_knowledge_base",
+				status: "ok",
+				backend: "ragflow",
+				evidence: [
+					{
+						evidenceId: "ev_preview1",
+						sourceType: "knowledge_base",
+						title: "线路缺陷判定规范",
+						text: "完整的内部知识库证据内容。\n包含排查条件与工艺依据。",
+						documentId: "doc-1",
+						chunkId: "chunk-9",
+						page: 4,
+						retrievedAt: "2026-11-03T00:00:00.000Z",
+					},
+				],
+			},
+			isError: false,
+			timestamp: Date.now(),
+		} satisfies Parameters<typeof manager.appendMessage>[0]);
+		assert.equal(env.service.getEvidence(ownerId, session.sessionId, "ev_preview1").title, "线路缺陷判定规范");
+
+		const preview = await fetch(`${base}/api/sessions/${session.sessionId}/evidence/ev_preview1`, {
+			headers: { Cookie: cookie },
+		});
+		assert.equal(preview.status, 200, await preview.clone().text());
+		assert.deepEqual(await preview.json(), {
+			evidenceId: "ev_preview1",
+			sourceType: "knowledge_base",
+			title: "线路缺陷判定规范",
+			text: "完整的内部知识库证据内容。\n包含排查条件与工艺依据。",
+			documentId: "doc-1",
+			chunkId: "chunk-9",
+			page: 4,
+		});
+		assert.equal((await fetch(`${base}/api/sessions/${session.sessionId}/evidence/ev_preview1`)).status, 404);
+		const otherVisitor = await fetch(`${base}/api/sessions`, { method: "POST" });
+		const otherCookie = otherVisitor.headers.get("set-cookie")!.split(";")[0];
+		assert.equal(
+			(
+				await fetch(`${base}/api/sessions/${session.sessionId}/evidence/ev_preview1`, {
+					headers: { Cookie: otherCookie },
+				})
+			).status,
+			404,
+		);
+	} finally {
+		server.closeAllConnections();
+		await new Promise<void>((resolve) => server.close(() => resolve()));
+		await env.cleanup();
+	}
+});
+
 test("HTTP uses signed persistent visitor credentials, same-origin writes, JSON dedup and session ownership", async () => {
 	const env = await setup();
 	const server = createHttpServer(env.service, env.root);
@@ -735,6 +812,51 @@ test("native retry settles once, final text replaces attempt text and usage matc
 			env.service.messages("a", sessionId).messages.filter((message) => message.role === "assistant").length,
 			1,
 		);
+	} finally {
+		await env.cleanup();
+	}
+});
+
+test("completed request usage and elapsed time are available when restoring assistant history", async () => {
+	const env = await setup();
+	try {
+		const { sessionId } = env.service.create("a");
+		env.harness.setResponses([fauxAssistantMessage("已完成历史用量测试")]);
+		const requestId = randomUUID();
+		const result = await finish(env.service.submit("a", sessionId, { requestId, message: "记录请求用量" }));
+		const assistant = env.service.messages("a", sessionId).messages.find((message) => message.role === "assistant");
+		assert.ok(assistant);
+		assert.deepEqual(assistant.usage, result.usage);
+		assert.equal(assistant.elapsedMs, result.elapsedMs);
+		assert.ok(Number.isFinite(result.elapsedMs));
+		assert.ok(result.elapsedMs! >= 0);
+	} finally {
+		await env.cleanup();
+	}
+});
+
+test("active requests publish server-reported usage snapshots from assistant events", async () => {
+	const env = await setup();
+	try {
+		const { sessionId } = env.service.create("a");
+		const answer = fauxAssistantMessage("统计中", { timestamp: Date.now() });
+		answer.usage = {
+			input: 120,
+			output: 30,
+			cacheRead: 80,
+			cacheWrite: 20,
+			totalTokens: 250,
+			cost: { input: 0.00008, output: 0.00003, cacheRead: 0.00002, cacheWrite: 0.000005, total: 0.000135 },
+		};
+		env.harness.setResponses([answer]);
+		const submission = env.service.submit("a", sessionId, { requestId: randomUUID(), message: "用量快照" });
+		const snapshots: unknown[] = [];
+		submission.subscribe!((event) => {
+			if (event.type === "usage_snapshot") snapshots.push(event.payload);
+		});
+		const result = await finish(submission);
+		assert.ok(snapshots.length > 0);
+		assert.deepEqual((snapshots.at(-1) as { usage: unknown }).usage, result.usage);
 	} finally {
 		await env.cleanup();
 	}

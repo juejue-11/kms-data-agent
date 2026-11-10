@@ -8,6 +8,18 @@ const newSessionBtn = document.getElementById("new-session-btn");
 const refreshSessionsBtn = document.getElementById("refresh-sessions-btn");
 const sessionTitle = document.getElementById("session-title");
 const runStatus = document.getElementById("run-status");
+const usageStatus = document.getElementById("usage-status");
+const usageSummary = document.getElementById("usage-summary");
+const usageFields = {
+	input: document.getElementById("usage-input"),
+	output: document.getElementById("usage-output"),
+	cacheRead: document.getElementById("usage-cache-read"),
+	cacheWrite: document.getElementById("usage-cache-write"),
+	total: document.getElementById("usage-total"),
+	cost: document.getElementById("usage-cost"),
+	elapsed: document.getElementById("usage-elapsed"),
+	model: document.getElementById("usage-model"),
+};
 const connectionDot = document.getElementById("connection-dot");
 const connectionTitle = document.getElementById("connection-title");
 const connectionDesc = document.getElementById("connection-desc");
@@ -22,6 +34,14 @@ const renameInput = document.getElementById("session-rename-input");
 const renameError = document.getElementById("session-rename-error");
 const renameCancelBtn = document.getElementById("session-rename-cancel");
 const renameSaveBtn = document.getElementById("session-rename-save");
+const evidenceDialog = document.getElementById("evidence-dialog");
+const evidencePreviewKind = document.getElementById("evidence-preview-kind");
+const evidencePreviewTitle = document.getElementById("evidence-preview-title");
+const evidencePreviewLocation = document.getElementById("evidence-preview-location");
+const evidencePreviewText = document.getElementById("evidence-preview-text");
+const evidencePreviewError = document.getElementById("evidence-preview-error");
+const evidencePreviewLink = document.getElementById("evidence-preview-link");
+const evidencePreviewClose = document.getElementById("evidence-preview-close");
 
 const SELECTED_SESSION_KEY = "pcb.selectedSessionId";
 const NEW_SESSION_TITLE = "新会话";
@@ -49,6 +69,7 @@ const JUMP_THRESHOLD_LINES = 3;
 const MIN_INPUT_HEIGHT_PX = 28;
 const MAX_INPUT_HEIGHT_PX = 160;
 const jumpToLatestButton = document.getElementById("jump-to-latest");
+let evidencePreviewGeneration = 0;
 
 const RECONCILE_DELAY_MS = 1500;
 
@@ -235,80 +256,127 @@ function sourceTitle(source) {
 	return source?.title || source?.source || source?.url || "未命名来源";
 }
 
-function stripMarkdown(text) {
-	return String(text || "")
-		.replace(/^\s*#+\s*/gm, "")
-		.replace(/\*\*([^*]+)\*\*/g, "$1")
-		.replace(/\*([^*]+)\*/g, "$1")
-		.replace(/`([^`]+)`/g, "$1")
-		.replace(/^>\s?/gm, "")
-		.trim();
+function closeEvidencePreview() {
+	evidencePreviewGeneration += 1;
+	if (evidenceDialog.open) evidenceDialog.close();
 }
 
-function appendSources(bubble, sources, citationValidation) {
-	bubble.querySelector(".sources")?.remove();
-	const validSources = Array.isArray(sources) ? sources : [];
-	const validation = asObject(citationValidation);
-	if (!validSources.length && validation.status !== "invalid") return;
-
-	const box = document.createElement("div");
-	box.className = "sources";
-	const head = document.createElement("div");
-	head.className = "sources-head";
-	head.textContent = validation.status === "invalid" ? "出处（引用校验有问题）" : "出处";
-	box.appendChild(head);
-
-	for (const source of validSources) {
-		const item = document.createElement("div");
-		item.className = "source-item";
-		const badge = document.createElement("span");
+async function openEvidencePreview(evidenceId) {
+	const sessionId = state.sessionId;
+	if (!sessionId || !evidenceId) return;
+	const generation = ++evidencePreviewGeneration;
+	evidencePreviewKind.className = "badge kb";
+	evidencePreviewKind.textContent = "引用材料";
+	evidencePreviewTitle.textContent = "正在加载…";
+	evidencePreviewLocation.textContent = "";
+	evidencePreviewText.textContent = "正在读取引用材料…";
+	evidencePreviewError.textContent = "";
+	evidencePreviewLink.hidden = true;
+	if (!evidenceDialog.open) evidenceDialog.showModal();
+	try {
+		const source = await api.getEvidence(sessionId, evidenceId);
+		if (generation !== evidencePreviewGeneration || sessionId !== state.sessionId || !evidenceDialog.open) return;
 		const kind = sourceKind(source);
-		badge.className = `badge ${kind}`;
-		badge.textContent = sourceKindLabel(source);
-		item.appendChild(badge);
-
-		const name = document.createElement("span");
-		name.className = "src-name";
-		name.textContent = sourceTitle(source);
-		item.appendChild(name);
-		if (source.evidenceId) {
-			const evidenceId = document.createElement("span");
-			evidenceId.className = "src-id";
-			evidenceId.textContent = ` [E:${source.evidenceId}]`;
-			item.appendChild(evidenceId);
+		evidencePreviewKind.className = `badge ${kind}`;
+		evidencePreviewKind.textContent = sourceKindLabel(source);
+		evidencePreviewTitle.textContent = sourceTitle(source);
+		evidencePreviewLocation.textContent = [
+			source.documentId ? `文档 ${source.documentId}` : "",
+			source.chunkId ? `片段 ${source.chunkId}` : "",
+			source.page === undefined || source.page === null ? "" : `第 ${source.page} 页`,
+		]
+			.filter(Boolean)
+			.join(" · ");
+		evidencePreviewText.textContent = typeof source.text === "string" ? source.text : "没有可展示的证据片段。";
+		const url = typeof source.url === "string" && /^https?:\/\//i.test(source.url) ? source.url : "";
+		if (url) {
+			evidencePreviewLink.href = url;
+			evidencePreviewLink.hidden = false;
 		}
-		if (source.page !== undefined && source.page !== null) {
-			const page = document.createElement("span");
-			page.className = "src-location";
-			page.textContent = ` · 第 ${source.page} 页`;
-			item.appendChild(page);
-		}
-		if (source.url && /^https?:\/\//i.test(String(source.url))) {
-			const link = document.createElement("a");
-			link.className = "src-link";
-			link.href = String(source.url);
-			link.target = "_blank";
-			link.rel = "noopener noreferrer";
-			link.textContent = "打开来源";
-			item.appendChild(link);
-		}
-		if (source.text) {
-			const snippet = document.createElement("div");
-			snippet.className = "src-text";
-			snippet.textContent = stripMarkdown(String(source.text).slice(0, 160));
-			item.appendChild(snippet);
-		}
-		box.appendChild(item);
+	} catch (error) {
+		if (generation !== evidencePreviewGeneration || sessionId !== state.sessionId || !evidenceDialog.open) return;
+		evidencePreviewTitle.textContent = "暂时无法加载引用材料";
+		evidencePreviewText.textContent = "";
+		evidencePreviewError.textContent = error?.message || "引用材料加载失败，请稍后重试。";
 	}
+}
 
-	if (validation.status === "invalid") {
-		const invalidIds = Array.isArray(validation.invalidIds) ? validation.invalidIds : [];
-		const warning = document.createElement("div");
-		warning.className = "citation-warning";
-		warning.textContent = invalidIds.length ? `无法定位引用：${invalidIds.join(", ")}` : "部分引用无法定位";
-		box.appendChild(warning);
+function appendCitationWarning(bubble, citationValidation) {
+	bubble.querySelector(".citation-warning")?.remove();
+	const validation = asObject(citationValidation);
+	if (validation.status !== "invalid") return;
+	const invalidIds = Array.isArray(validation.invalidIds) ? validation.invalidIds : [];
+	const warning = document.createElement("div");
+	warning.className = "citation-warning";
+	warning.textContent = invalidIds.length ? `无法定位引用：${invalidIds.join(", ")}` : "部分引用无法定位";
+	bubble.appendChild(warning);
+}
+
+function formatUsageCount(value) {
+	return Number.isFinite(value) && value >= 0 ? new Intl.NumberFormat("zh-CN").format(value) : "—";
+}
+
+function formatUsageCost(value) {
+	if (!Number.isFinite(value) || value < 0) return "—";
+	return `$${value.toFixed(6).replace(/0+$/, "").replace(/\.$/, "")}`;
+}
+
+function renderComposerUsage({ usage, model, elapsedMs, estimatedOutput, state: usageState = "idle" } = {}) {
+	usageStatus.dataset.state = usageState;
+	const hasUsage = isRecord(usage);
+	const hasCacheCounters = hasUsage && (Number(usage.cacheRead) > 0 || Number(usage.cacheWrite) > 0);
+	const promptTokens = hasUsage ? Number(usage.input) + Number(usage.cacheRead) + Number(usage.cacheWrite) : 0;
+	const cacheRate =
+		hasCacheCounters && promptTokens > 0
+			? `${((Number(usage.cacheRead) / promptTokens) * 100).toFixed(1)}%`
+			: "缓存不可用";
+	const elapsed = Number.isFinite(elapsedMs) && elapsedMs >= 0 ? `${(elapsedMs / 1000).toFixed(1)} 秒` : "—";
+	if (usageState === "running") {
+		usageSummary.textContent = hasUsage
+			? `本轮 · 输入 ${formatUsageCount(usage.input)} · 输出 ${formatUsageCount(usage.output)} · 缓存命中 ${cacheRate} · ${formatUsageCost(usage.cost)} · ${elapsed}`
+			: `本轮 · 输出约 ${formatUsageCount(estimatedOutput)} token · ${elapsed}`;
+	} else if (hasUsage) {
+		usageSummary.textContent = `上轮 · 输入 ${formatUsageCount(usage.input)} / 输出 ${formatUsageCount(usage.output)} · 缓存命中 ${cacheRate} · ${formatUsageCost(usage.cost)} · ${elapsed}`;
+	} else {
+		usageSummary.textContent = "本轮用量";
 	}
-	bubble.appendChild(box);
+	usageFields.input.textContent = hasUsage ? formatUsageCount(usage.input) : "—";
+	usageFields.output.textContent = hasUsage
+		? formatUsageCount(usage.output)
+		: usageState === "running"
+			? `约 ${formatUsageCount(estimatedOutput)}`
+			: "—";
+	usageFields.cacheRead.textContent = hasCacheCounters ? formatUsageCount(usage.cacheRead) : "不可用";
+	usageFields.cacheWrite.textContent = hasCacheCounters ? formatUsageCount(usage.cacheWrite) : "不可用";
+	usageFields.total.textContent = hasUsage ? formatUsageCount(usage.totalTokens) : "—";
+	usageFields.cost.textContent = hasUsage ? formatUsageCost(usage.cost) : "—";
+	usageFields.elapsed.textContent = elapsed;
+	usageFields.model.textContent = model || "—";
+}
+
+function renderRequestUsage(request, state = "running") {
+	const elapsedMs = state === "running" ? Date.now() - request.startedAt : request.elapsedMs;
+	renderComposerUsage({
+		usage: request.usageSnapshot,
+		model: request.model,
+		elapsedMs,
+		estimatedOutput: Math.ceil(request.streamedText.length / 4),
+		state,
+	});
+}
+
+function stopUsageClock(request) {
+	if (request.usageClock !== undefined) {
+		clearInterval(request.usageClock);
+		request.usageClock = undefined;
+	}
+}
+
+function startUsageClock(request) {
+	renderRequestUsage(request);
+	request.usageClock = setInterval(() => {
+		if (currentRequest(request)) renderRequestUsage(request);
+	}, 1000);
 }
 
 function setMessageStatus(message, status) {
@@ -324,7 +392,7 @@ function setMessageStatus(message, status) {
 	if (!existing) message.bubble.appendChild(statusNode);
 }
 
-function addMessage(text, className, sources = [], options = {}) {
+function addMessage(text, className, options = {}) {
 	workspace.hideWelcome();
 	const wrap = document.createElement("div");
 	wrap.className = `message ${className}`;
@@ -363,39 +431,52 @@ function addMessage(text, className, sources = [], options = {}) {
 		bubble.appendChild(status);
 	}
 	wrap.appendChild(bubble);
-	if (className === "ai-message") appendSources(bubble, sources, options.citationValidation);
+	if (className === "ai-message") {
+		appendCitationWarning(bubble, options.citationValidation);
+	}
 	chatBox.appendChild(wrap);
 	scrollToLatest();
 	return { wrap, bubble, textNode };
 }
 
-function updateAssistant(message, text, { sources, citationValidation, status } = {}) {
+function updateAssistant(message, text, { citationValidation, status } = {}) {
 	message.textNode.replaceChildren(renderMarkdown(text || ""));
 	if (status) message.wrap.dataset.status = status;
 	setMessageStatus(message, status);
-	appendSources(message.bubble, sources, citationValidation);
+	appendCitationWarning(message.bubble, citationValidation);
 	scrollToLatest();
 }
 
 function renderHistory(messages) {
 	clearChat();
 	if (!Array.isArray(messages) || !messages.length) {
+		renderComposerUsage();
 		addWelcome();
 		return;
 	}
+	let latestUsage;
 	for (const message of messages) {
 		const role = String(message.role || "").toLowerCase();
 		const className = role === "user" ? "user-message" : "ai-message";
 		const content = messageContent(message);
 		const displayContent = content || (message.status ? `请求状态：${message.status}` : "");
 		if (!displayContent) continue;
-		addMessage(displayContent, className, message.sources || [], {
+		addMessage(displayContent, className, {
 			entryId: message.entryId,
 			requestId: message.requestId,
 			citationValidation: message.citationValidation,
 			status: message.status,
 		});
+		if (role === "assistant" && isRecord(message.usage)) latestUsage = message;
 	}
+	if (latestUsage)
+		renderComposerUsage({
+			usage: latestUsage.usage,
+			model: latestUsage.model,
+			elapsedMs: latestUsage.elapsedMs,
+			state: "complete",
+		});
+	else renderComposerUsage();
 	if (!chatBox.children.length) addWelcome();
 	state.isFollowing = true;
 	scrollToLatest({ restoreFollow: true });
@@ -423,10 +504,14 @@ function renderFinal(request, final) {
 			? `请求状态：${status}`
 			: "服务未返回回答。";
 	updateAssistant(request.assistant, reply || fallback, {
-		sources: result.sources,
 		citationValidation: result.citationValidation,
 		status,
 	});
+	request.usageSnapshot = result.usage || request.usageSnapshot;
+	request.model = result.model || request.model;
+	request.elapsedMs = result.elapsedMs;
+	stopUsageClock(request);
+	renderRequestUsage(request, "complete");
 	if (status === "succeeded") setRunStatus("已完成");
 	else if (status) setRunStatus(`请求状态：${status}`, status !== "cancelled" && status !== "canceled");
 	else setRunStatus("");
@@ -561,8 +646,8 @@ async function sendMessage() {
 
 	const generation = state.viewGeneration;
 	const requestId = makeRequestId();
-	addMessage(text, "user-message", [], { requestId });
-	const assistant = addMessage("", "ai-message", [], { requestId });
+	addMessage(text, "user-message", { requestId });
+	const assistant = addMessage("", "ai-message", { requestId });
 	const request = {
 		sessionId,
 		requestId,
@@ -570,11 +655,15 @@ async function sendMessage() {
 		assistant,
 		streamedText: "",
 		completedText: "",
+		startedAt: Date.now(),
+		usageSnapshot: undefined,
+		model: undefined,
 		controller: new AbortController(),
 		cancelling: false,
 		connectionLost: false,
 	};
 	setActiveRequest(request);
+	startUsageClock(request);
 	userInput.value = "";
 	resizeUserInput();
 	setRunStatus("正在请求模型…");
@@ -594,14 +683,22 @@ async function sendMessage() {
 					const delta = typeof asObject(event.payload).delta === "string" ? event.payload.delta : "";
 					request.streamedText += delta;
 					updateAssistant(request.assistant, request.streamedText);
+					renderRequestUsage(request);
+				} else if (event?.type === "usage_snapshot") {
+					const payload = asObject(event.payload);
+					if (isRecord(payload.usage)) request.usageSnapshot = payload.usage;
+					if (typeof payload.model === "string") request.model = payload.model;
+					renderRequestUsage(request);
 				} else if (event?.type === "message_completed") {
 					const payload = asObject(event.payload);
 					const completed = typeof payload.text === "string" ? payload.text : messageContent(payload);
 					if (completed) {
 						request.completedText = completed;
+						request.streamedText = completed;
 						updateAssistant(request.assistant, completed);
+						renderRequestUsage(request);
+						request.streamedText = "";
 					}
-					request.streamedText = "";
 				} else if (event?.type === "request_finished") {
 					const final = window.PcbApi.eventFinalResult(event);
 					if (final) finishRequest(request, final);
@@ -692,6 +789,7 @@ function invalidateActiveRequest() {
 	const previous = state.activeRequest;
 	if (previous) {
 		clearReconcileTimer(previous);
+		stopUsageClock(previous);
 		previous.controller.abort();
 	}
 	state.activeRequest = null;
@@ -702,11 +800,13 @@ function showEmptySession() {
 	// 删除最后一个会话或首次打开空列表时只准备空白页面，发送消息前再创建后端会话。
 	state.viewGeneration += 1;
 	invalidateActiveRequest();
+	closeEvidencePreview();
 	state.sessionId = null;
 	safeStorageRemove(SELECTED_SESSION_KEY);
 	sessionTitle.textContent = NEW_SESSION_TITLE;
 	setRunStatus("");
 	clearChat();
+	renderComposerUsage();
 	addWelcome();
 	renderSessionList();
 }
@@ -746,6 +846,7 @@ async function createSession() {
 	try {
 		state.viewGeneration += 1;
 		invalidateActiveRequest();
+		closeEvidencePreview();
 		const created = await api.createSession();
 		if (!created.sessionId) throw new Error("服务未返回会话 ID");
 		state.sessionId = created.sessionId;
@@ -753,6 +854,7 @@ async function createSession() {
 		sessionTitle.textContent = sessionDisplayTitle(created);
 		setRunStatus("");
 		clearChat();
+		renderComposerUsage();
 		addWelcome();
 		await refreshSessions({ preserveSelection: true });
 	} finally {
@@ -767,6 +869,7 @@ async function selectSession(sessionId) {
 	const generation = state.viewGeneration + 1;
 	state.viewGeneration = generation;
 	invalidateActiveRequest();
+	closeEvidencePreview();
 	state.sessionId = sessionId;
 	safeStorageSet(SELECTED_SESSION_KEY, sessionId);
 	state.loadingSession = true;
@@ -774,6 +877,7 @@ async function selectSession(sessionId) {
 	const isCurrentView = () => state.sessionId === sessionId && state.viewGeneration === generation;
 	renderSessionList();
 	clearChat();
+	renderComposerUsage();
 	setRunStatus("正在恢复会话…");
 	try {
 		const [session, history] = await Promise.all([
@@ -794,14 +898,18 @@ async function selectSession(sessionId) {
 				sessionId,
 				requestId: activeRequestId,
 				generation,
-				assistant: addMessage("", "ai-message", [], { requestId: activeRequestId }),
+				assistant: addMessage("", "ai-message", { requestId: activeRequestId }),
 				streamedText: "",
 				completedText: "",
+				startedAt: Date.now(),
+				usageSnapshot: undefined,
+				model: undefined,
 				controller: new AbortController(),
 				cancelling: false,
 				connectionLost: true,
 			};
 			state.activeRequest = request;
+			startUsageClock(request);
 			setSending(true);
 			setRunStatus("会话中有运行中的请求，正在查询状态…");
 			await reconcileRequest(request);
@@ -965,6 +1073,14 @@ chatBox.addEventListener("pointerdown", releaseFollowOnUserInput, { passive: tru
 if (jumpToLatestButton) {
 	jumpToLatestButton.addEventListener("click", () => scrollToLatest({ restoreFollow: true }));
 }
+chatBox.addEventListener("click", (event) => {
+	const trigger = event.target?.closest?.("[data-preview-evidence]");
+	if (trigger && chatBox.contains(trigger)) void openEvidencePreview(trigger.dataset.evidenceId);
+});
+evidencePreviewClose.addEventListener("click", closeEvidencePreview);
+evidenceDialog.addEventListener("close", () => {
+	evidencePreviewGeneration += 1;
+});
 if (composerRegion && typeof ResizeObserver === "function") {
 	new ResizeObserver(updateChatBottomPadding).observe(composerRegion);
 }

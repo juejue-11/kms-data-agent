@@ -1,4 +1,5 @@
 // 离线评分器自检：检索正确不等于结论正确；缺失结果、合成样例和实测基线必须区分。
+import { readFile } from "node:fs/promises";
 import { describe, expect, it } from "vitest";
 import { PCB_EVALUATION_CASES } from "../evals/fixtures.ts";
 import { evaluatePcbResults, parseEvaluationResults, scoreFinal, scoreRetrieval } from "../evals/score.ts";
@@ -23,11 +24,15 @@ function passingResults(): EvaluationActualResult[] {
 			answer: {
 				predictedDefect: answer.expectedDefect,
 				criteria: answer.requiredCriteria,
-				followUpQuestions: answer.requiredFollowUps,
+				followUpQuestions: answer.requiredFollowUps ?? [],
+				validationSteps: answer.requiredValidationSteps,
+				recommendations: answer.requiredRecommendations,
 				asked: answer.mustAsk,
 				refused: answer.mustRefuseConclusion,
 				conflictAcknowledged: answer.mustAcknowledgeConflict,
 				conclusionType: answer.expectedConclusionType,
+				unnecessaryDisclaimer: false,
+				repetitiveContent: false,
 			},
 		};
 	});
@@ -84,9 +89,36 @@ describe("PCB business evaluation", () => {
 		expect(report.passedCases).toBe(PCB_EVALUATION_CASES.length);
 		expect(report.retrieval.meanScore).toBe(1);
 		expect(report.final.meanScore).toBe(1);
+		expect(report.retrievalHitRate).toEqual({ hits: 6, eligible: 6, rate: 1 });
+		expect(report.decisionAccuracy).toEqual({ correct: 7, eligible: 7, rate: 1 });
+		expect(report.closureCompletionRate).toEqual({ completed: 5, eligible: 5, rate: 1 });
 		expect(report.baseline.measured).toBe(true);
 		expect(report.baseline.sample).toBe(false);
 		expect(report.baseline.releaseThreshold).toBeNull();
+	});
+
+	it("reports missed retrieval, wrong decisions and incomplete answer closure separately", () => {
+		const results = passingResults();
+		const missing = results.find((result) => result.caseId === "multi-turn-board-scratch");
+		if (!missing?.retrieval || !missing.answer) throw new Error("multi-turn fixture result is required");
+		missing.retrieval.hits = [];
+		missing.answer.predictedDefect = "open-circuit";
+		missing.answer.recommendations = [];
+		const report = evaluatePcbResults(PCB_EVALUATION_CASES, results);
+		expect(report.retrievalHitRate).toEqual({ hits: 5, eligible: 6, rate: 5 / 6 });
+		expect(report.decisionAccuracy.correct).toBe(6);
+		expect(report.closureCompletionRate.completed).toBe(4);
+	});
+
+	it("system prompt defines the five concise answer sections and avoids boilerplate disclaimers", async () => {
+		const prompt = await readFile(new URL("../../resources/pcb/system-prompt.md", import.meta.url), "utf8");
+		for (const heading of ["初步判断", "判定依据", "需要确认的信息", "验证方法", "处理建议"])
+			expect(prompt).toContain(heading);
+		expect(prompt).toContain("在对应句末附上 [E:ev_xxx]");
+		expect(prompt).toContain("前端会将标记显示为可点击引用");
+		expect(prompt).toContain("不要只因为检索到资料就强行标注");
+		expect(prompt).toContain("不要添加与当前判断无关的通用免责声明");
+		expect(prompt).toContain("已确认的信息不要在多个部分重复");
 	});
 
 	it("marks missing results unmeasured and synthetic results as sample data", () => {

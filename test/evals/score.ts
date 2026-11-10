@@ -268,8 +268,45 @@ export function scoreFinal(fixture: PcbEvaluationCase, actual: EvaluationActualR
 						: "The evidence conflict is not acknowledged.",
 				)
 			: undefined;
+	const closedLoop = expectation.requiresClosedLoop
+		? dimension(
+				Boolean(answer) &&
+					(answer?.criteria?.length ?? 0) > 0 &&
+					(requiredFollowUps.length === 0 || (answer?.followUpQuestions?.length ?? 0) > 0) &&
+					(expectation.requiredValidationSteps ?? []).every((item) =>
+						includesPhrase(answer?.validationSteps ?? [], item),
+					) &&
+					(expectation.requiredRecommendations ?? []).every((item) =>
+						includesPhrase(answer?.recommendations ?? [], item),
+					) &&
+					(expectation.requiredValidationSteps?.length ?? 0) > 0 &&
+					(expectation.requiredRecommendations?.length ?? 0) > 0 &&
+					answer?.unnecessaryDisclaimer !== true &&
+					answer?.repetitiveContent !== true,
+				!answer
+					? "Final answer is missing, so closure cannot be verified."
+					: [
+							(answer.criteria?.length ?? 0) > 0 ? "Basis is present." : "Basis is missing.",
+							(answer.followUpQuestions?.length ?? 0) > 0
+								? "Confirmation information is present."
+								: "Confirmation information is missing.",
+							(answer.validationSteps?.length ?? 0) > 0
+								? "Validation method is present."
+								: "Validation method is missing.",
+							(answer.recommendations?.length ?? 0) > 0
+								? "Recommendation is present."
+								: "Recommendation is missing.",
+							answer.unnecessaryDisclaimer === true
+								? "Unnecessary disclaimer was flagged."
+								: "No unnecessary disclaimer was flagged.",
+							answer.repetitiveContent === true
+								? "Repetitive content was flagged."
+								: "No repetitive content was flagged.",
+						].join(" "),
+			)
+		: undefined;
 
-	const dimensions = { conclusion, conclusionType, criteria, followUp, refusal, conflict };
+	const dimensions = { conclusion, conclusionType, criteria, followUp, refusal, conflict, closedLoop };
 	const summary = aggregate(dimensions);
 	return { ...summary, dimensions, reasons: summary.reasons };
 }
@@ -298,6 +335,25 @@ export function evaluatePcbResults(
 	});
 	const retrievalPassedCases = cases.filter((item) => item.retrieval.passed).length;
 	const finalPassedCases = cases.filter((item) => item.final.passed).length;
+	const retrievalEligible = fixtures.filter((fixture) => fixture.expectation.retrieval.shouldHit);
+	const decisionEligible = cases.filter((item) => {
+		const expectation = fixtures.find((fixture) => fixture.id === item.caseId)?.expectation.answer;
+		return Boolean(
+			expectation?.expectedDefect || expectation?.allowedCandidates?.length || expectation?.mustRefuseConclusion,
+		);
+	});
+	const closureEligible = cases.filter(
+		(item) => fixtures.find((fixture) => fixture.id === item.caseId)?.expectation.answer.requiresClosedLoop === true,
+	);
+	const decisionCorrect = decisionEligible.filter((item) =>
+		[
+			item.final.dimensions.conclusion,
+			item.final.dimensions.conclusionType,
+			item.final.dimensions.refusal,
+			item.final.dimensions.conflict,
+		].every((dimension) => dimension === undefined || dimension.passed === null || dimension.passed === true),
+	);
+	const ratio = (successes: number, eligible: number): number | null => (eligible ? successes / eligible : null);
 	const fixtureIds = new Set(fixtures.map((fixture) => fixture.id));
 	const measured = results.some((result) => fixtureIds.has(result.caseId));
 	const sample = options.sample === true;
@@ -315,6 +371,27 @@ export function evaluatePcbResults(
 		final: {
 			passedCases: finalPassedCases,
 			meanScore: cases.length ? cases.reduce((sum, item) => sum + item.final.score, 0) / cases.length : 1,
+		},
+		retrievalHitRate: {
+			hits: retrievalEligible.filter((fixture) => (byCase.get(fixture.id)?.retrieval?.hits?.length ?? 0) > 0).length,
+			eligible: retrievalEligible.length,
+			rate: ratio(
+				retrievalEligible.filter((fixture) => (byCase.get(fixture.id)?.retrieval?.hits?.length ?? 0) > 0).length,
+				retrievalEligible.length,
+			),
+		},
+		decisionAccuracy: {
+			correct: decisionCorrect.length,
+			eligible: decisionEligible.length,
+			rate: ratio(decisionCorrect.length, decisionEligible.length),
+		},
+		closureCompletionRate: {
+			completed: closureEligible.filter((item) => item.final.dimensions.closedLoop?.passed === true).length,
+			eligible: closureEligible.length,
+			rate: ratio(
+				closureEligible.filter((item) => item.final.dimensions.closedLoop?.passed === true).length,
+				closureEligible.length,
+			),
 		},
 		cases,
 		baseline: {
@@ -376,6 +453,12 @@ function normalizeAnswer(value: unknown): EvaluationActualAnswer | undefined {
 		: Array.isArray(item.followUps)
 			? item.followUps.filter((entry): entry is string => typeof entry === "string")
 			: undefined;
+	const validationSteps = Array.isArray(item.validationSteps)
+		? item.validationSteps.filter((entry): entry is string => typeof entry === "string")
+		: undefined;
+	const recommendations = Array.isArray(item.recommendations)
+		? item.recommendations.filter((entry): entry is string => typeof entry === "string")
+		: undefined;
 	return {
 		predictedDefect:
 			typeof item.predictedDefect === "string"
@@ -386,6 +469,10 @@ function normalizeAnswer(value: unknown): EvaluationActualAnswer | undefined {
 		candidates,
 		criteria,
 		followUpQuestions,
+		validationSteps,
+		recommendations,
+		unnecessaryDisclaimer: typeof item.unnecessaryDisclaimer === "boolean" ? item.unnecessaryDisclaimer : undefined,
+		repetitiveContent: typeof item.repetitiveContent === "boolean" ? item.repetitiveContent : undefined,
 		asked: typeof item.asked === "boolean" ? item.asked : undefined,
 		refused:
 			typeof item.refused === "boolean"

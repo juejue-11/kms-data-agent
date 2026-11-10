@@ -1080,6 +1080,73 @@ select:focus-visible,
     line-height: 1.4;
 }
 
+.composer-usage {
+	position: relative;
+	min-width: 0;
+	flex: 1 1 auto;
+	color: var(--text-faint);
+	font-size: 11px;
+}
+
+.composer-usage[data-state="running"] {
+	color: var(--navy-700);
+}
+
+.composer-usage[data-state="complete"] {
+	color: var(--text-muted);
+}
+
+.composer-usage-details > summary {
+	width: fit-content;
+	max-width: 100%;
+	line-height: 1.5;
+	cursor: pointer;
+	overflow-wrap: anywhere;
+}
+
+.composer-usage-details > summary:hover {
+	color: var(--navy-700);
+}
+
+.composer-usage-popover {
+	position: absolute;
+	bottom: calc(100% + 10px);
+	left: 0;
+	z-index: 12;
+	width: min(360px, calc(100vw - 48px));
+	padding: 10px 12px;
+	border: 1px solid var(--line);
+	border-radius: 6px;
+	color: var(--text-muted);
+	background: var(--surface);
+	box-shadow: var(--shadow-float);
+}
+
+.composer-usage-popover dl {
+	display: grid;
+	grid-template-columns: repeat(2, minmax(0, 1fr));
+	gap: 7px 16px;
+	margin: 0;
+}
+
+.composer-usage-popover dl > div {
+	display: flex;
+	min-width: 0;
+	justify-content: space-between;
+	gap: 8px;
+}
+
+.composer-usage-popover dt {
+	color: var(--text-faint);
+}
+
+.composer-usage-popover dd {
+	margin: 0;
+	font-variant-numeric: tabular-nums;
+	text-align: right;
+	overflow-wrap: anywhere;
+}
+
 /* ===== Markdown 正文 ===== */
 
 .msg-text.markdown {
@@ -1281,44 +1348,7 @@ select:focus-visible,
     border-top: 1px solid var(--line);
 }
 
-/* ===== 来源与引用 ===== */
-
-.sources {
-    display: flex;
-    flex-direction: column;
-    gap: 7px;
-    margin-top: 12px;
-}
-
-.sources-head {
-    color: var(--text-faint);
-    font-size: 10.5px;
-    letter-spacing: 0.04em;
-}
-
-.source-item {
-    padding: 8px 10px;
-    border-left: 2px solid var(--line-strong);
-    border-radius: 0 6px 6px 0;
-    color: var(--text-muted);
-    background: rgba(255, 255, 255, 0.5);
-    font-size: 11.5px;
-    line-height: 1.45;
-}
-
-.source-item .src-name {
-    color: var(--text-muted);
-    font-weight: 600;
-}
-
-.source-item .src-text {
-    display: -webkit-box;
-    margin-top: 3px;
-    overflow: hidden;
-    color: var(--text-faint);
-    -webkit-box-orient: vertical;
-    -webkit-line-clamp: 2;
-}
+/* ===== 引用与证据预览 ===== */
 
 .badge {
     display: inline-block;
@@ -1351,30 +1381,26 @@ select:focus-visible,
     background: #f0ebf6;
 }
 
-.src-location,
-.src-id {
-    color: var(--text-faint);
-    font-size: 10.5px;
-}
-
-.src-id {
-    font-family: var(--font-mono);
-}
-
-.src-link {
-    margin-left: 7px;
-    color: var(--navy-700);
-    font-size: 10.5px;
-}
-
-.src-link:hover {
-    color: #9c6d1d;
-}
-
 .citation-warning {
     margin-top: 5px;
     color: var(--danger);
     font-size: 11px;
+}
+
+.citation-link {
+    padding: 0 1px;
+    border: 0;
+    border-radius: 2px;
+    color: var(--navy-700);
+    background: transparent;
+    font-size: inherit;
+    font-weight: 650;
+    text-decoration: underline dotted;
+    text-underline-offset: 2px;
+}
+
+.citation-link:hover {
+    color: #9c6d1d;
 }
 
 /* ===== 底部输入区 ===== */
@@ -1613,6 +1639,123 @@ select:focus-visible,
     margin: 8px 0 12px;
     color: var(--danger);
     font-size: 12px;
+}
+
+.evidence-dialog {
+    position: fixed;
+    inset: 0 0 0 auto;
+    width: min(480px, 100vw);
+    height: 100dvh;
+    max-height: none;
+    margin: 0 0 0 auto;
+    padding: 0;
+    overflow: hidden;
+    border: 0;
+    border-left: 1px solid var(--line);
+    color: var(--text);
+    background: var(--surface);
+    box-shadow: -16px 0 48px rgba(7, 26, 41, 0.2);
+}
+
+.evidence-dialog[open] {
+    animation: evidence-drawer-in 180ms ease-out;
+}
+
+.evidence-dialog::backdrop {
+    background: rgba(7, 26, 41, 0.34);
+}
+
+.evidence-dialog-shell {
+    display: flex;
+    height: 100%;
+    flex-direction: column;
+}
+
+.evidence-dialog-header {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 18px;
+    padding: 24px 22px 18px 26px;
+    border-bottom: 1px solid var(--line);
+}
+
+.evidence-dialog-heading {
+    min-width: 0;
+}
+
+.evidence-dialog-heading .badge {
+    margin: 0 0 11px;
+}
+
+.evidence-dialog-heading h2 {
+    overflow-wrap: anywhere;
+    color: var(--navy-900);
+    font-size: 19px;
+    font-weight: 650;
+    line-height: 1.4;
+}
+
+.evidence-close {
+    width: 36px;
+    height: 36px;
+    flex: 0 0 36px;
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    color: var(--text-muted);
+    background: var(--surface);
+}
+
+.evidence-close svg {
+    width: 16px;
+    height: 16px;
+}
+
+.evidence-preview-location {
+    min-height: 22px;
+    padding: 12px 26px 0;
+    color: var(--text-faint);
+    font-size: 11.5px;
+    overflow-wrap: anywhere;
+}
+
+.evidence-preview-error {
+    margin: 0 26px;
+    color: var(--danger);
+    font-size: 12px;
+    line-height: 1.5;
+}
+
+.evidence-preview-text {
+    min-height: 0;
+    flex: 1;
+    margin: 14px 0 0;
+    padding: 20px 26px 28px;
+    overflow: auto;
+    color: var(--text);
+    background: var(--surface-soft);
+    font-size: 14px;
+    line-height: 1.8;
+    overflow-wrap: anywhere;
+    white-space: pre-wrap;
+}
+
+.evidence-preview-footer {
+    display: flex;
+    min-height: 64px;
+    align-items: center;
+    justify-content: flex-end;
+    padding: 12px 26px;
+    border-top: 1px solid var(--line);
+}
+
+.evidence-preview-footer a {
+    text-decoration: none;
+}
+
+@keyframes evidence-drawer-in {
+    from { transform: translateX(18px); opacity: 0.7; }
+    to { transform: translateX(0); opacity: 1; }
 }
 
 .dialog-button {
@@ -1903,8 +2046,45 @@ select:focus-visible,
         max-width: 60%;
     }
 
+    .composer-usage {
+        font-size: 10px;
+    }
+
+    .composer-usage-popover dl {
+        grid-template-columns: minmax(0, 1fr);
+    }
+
     .composer-note {
         font-size: 10px;
+    }
+
+    .evidence-dialog {
+        width: 100vw;
+        border-left: 0;
+    }
+
+    .evidence-dialog-header {
+        padding: 18px 16px 15px 19px;
+    }
+
+    .evidence-preview-location {
+        padding-right: 19px;
+        padding-left: 19px;
+    }
+
+    .evidence-preview-error {
+        margin-right: 19px;
+        margin-left: 19px;
+    }
+
+    .evidence-preview-text {
+        padding-right: 19px;
+        padding-left: 19px;
+    }
+
+    .evidence-preview-footer {
+        padding-right: 19px;
+        padding-left: 19px;
     }
 }
 
@@ -1918,4 +2098,8 @@ select:focus-visible,
         animation-iteration-count: 1 !important;
         transition-duration: 0.01ms !important;
     }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .evidence-dialog[open] { animation: none; }
 }

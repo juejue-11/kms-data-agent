@@ -85,6 +85,10 @@ export function createHttpServer(service: AgentService, dataDir: string) {
 			}
 		}
 		const sessionId = parts[2];
+		if (parts.length === 5 && parts[3] === "evidence" && request.method === "GET") {
+			json(response, 200, service.getEvidence(ownerId, sessionId!, parts[4]!));
+			return;
+		}
 		if (parts.length === 3) {
 			if (request.method === "GET") {
 				json(response, 200, service.get(ownerId, sessionId));

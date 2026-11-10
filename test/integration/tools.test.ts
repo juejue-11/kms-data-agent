@@ -106,6 +106,7 @@ test("real Pi tools consume conversational queries, persist evidence and expose 
 			(context) => {
 				const actual = JSON.stringify(context);
 				assert.match(actual, /PCB/);
+				assert.match(actual, /在对应句末附上 \[E:ev_xxx\]/);
 				assert.doesNotMatch(
 					actual,
 					/Development Rules|expert coding assistant|"name":"bash"|"name":"read"|"name":"write"/,
@@ -126,11 +127,16 @@ test("real Pi tools consume conversational queries, persist evidence and expose 
 					stopReason: "toolUse",
 				});
 			},
-			fauxAssistantMessage("先确认是否露铜和划伤深度。[E:ev_scratch]"),
+			fauxAssistantMessage("先确认是否露铜和划伤深度。"),
 		]);
 		const second = await env.run(sessionId, "这种缺陷怎么处理？");
 		assert.equal(second.status, "succeeded");
+		assert.equal(second.citationValidation.status, "not_applicable");
+		assert.equal(second.sources[0]?.evidenceId, "ev_scratch");
 		assert.deepEqual(queries, ["板面划伤", "板面划伤处理及露铜判据"]);
+		const restored = env.service.messages("owner", sessionId).messages.at(-1);
+		assert.equal(restored?.sources?.[0]?.evidenceId, "ev_scratch");
+		assert.equal(restored?.citationValidation?.status, "not_applicable");
 		const live = env.service.registry.instances.get(sessionId)!;
 		assert.deepEqual(live.session.getActiveToolNames().sort(), [
 			"get_evidence",
@@ -143,6 +149,51 @@ test("real Pi tools consume conversational queries, persist evidence and expose 
 				.length,
 			2,
 		);
+	} finally {
+		await env.cleanup();
+	}
+});
+
+test("uncited retrieval previews stay within their request during history restore and request polling", async () => {
+	let searchCount = 0;
+	const env = await setup({
+		searchKnowledgeBase: async () => ({
+			...evidence,
+			evidence: [{ ...evidence.evidence[0], evidenceId: `ev_round_${++searchCount}` }],
+		}),
+	});
+	try {
+		const { sessionId } = env.service.create("owner");
+		for (let round = 1; round <= 2; round++) {
+			env.harness.setResponses([
+				fauxAssistantMessage(fauxToolCall("search_knowledge_base", { query: `划伤检查 ${round}` }), {
+					stopReason: "toolUse",
+				}),
+				fauxAssistantMessage(`第 ${round} 轮：确认划伤深度。`),
+			]);
+			const result = await env.run(sessionId, `检查第 ${round} 个问题`);
+			assert.deepEqual(
+				result.sources.map((source) => source.evidenceId),
+				[`ev_round_${round}`],
+			);
+			assert.equal(result.citationValidation.status, "not_applicable");
+		}
+		env.harness.setResponses([fauxAssistantMessage("你好。")]);
+		const greeting = await env.run(sessionId, "你好");
+		assert.deepEqual(greeting.sources, []);
+		env.service.reap(Date.now() + 1_000_000);
+		const restored = env.service
+			.messages("owner", sessionId)
+			.messages.filter((message) => message.role === "assistant");
+		assert.deepEqual(
+			restored.map((message) => message.sources?.map((source) => source.evidenceId)),
+			[["ev_round_1"], ["ev_round_2"], []],
+		);
+		for (const message of restored) {
+			const polled = env.service.request("owner", sessionId, message.requestId!);
+			assert.deepEqual(polled.sources, message.sources);
+		}
+		assert.equal(env.service.getEvidence("owner", sessionId, "ev_round_1").text, evidence.evidence[0].text);
 	} finally {
 		await env.cleanup();
 	}

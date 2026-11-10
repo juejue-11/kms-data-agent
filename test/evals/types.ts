@@ -39,6 +39,9 @@ export interface EvaluationAnswerExpectation {
 	forbiddenDefects?: readonly string[];
 	requiredCriteria?: readonly string[];
 	requiredFollowUps?: readonly string[];
+	requiredValidationSteps?: readonly string[];
+	requiredRecommendations?: readonly string[];
+	requiresClosedLoop?: boolean;
 	mustAsk?: boolean;
 	mustRefuseConclusion?: boolean;
 	mustAcknowledgeConflict?: boolean;
@@ -63,6 +66,10 @@ export interface EvaluationActualAnswer {
 	candidates?: readonly string[];
 	criteria?: readonly string[];
 	followUpQuestions?: readonly string[];
+	validationSteps?: readonly string[];
+	recommendations?: readonly string[];
+	unnecessaryDisclaimer?: boolean;
+	repetitiveContent?: boolean;
 	asked?: boolean;
 	refused?: boolean;
 	conflictAcknowledged?: boolean;
@@ -109,6 +116,7 @@ export interface FinalEvaluation {
 		followUp: EvaluationDimension;
 		refusal: EvaluationDimension;
 		conflict?: EvaluationDimension;
+		closedLoop?: EvaluationDimension;
 	};
 	reasons: readonly string[];
 }
@@ -137,6 +145,9 @@ export interface EvaluationReport {
 		passedCases: number;
 		meanScore: number;
 	};
+	retrievalHitRate: { hits: number; eligible: number; rate: number | null };
+	decisionAccuracy: { correct: number; eligible: number; rate: number | null };
+	closureCompletionRate: { completed: number; eligible: number; rate: number | null };
 	cases: readonly CaseEvaluation[];
 	/** baseline 只描述当前是否有测量结果，不预设发布阈值。 */
 	baseline: {

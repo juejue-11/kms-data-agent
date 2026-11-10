@@ -257,6 +257,13 @@
 			return asObject(response.data);
 		}
 
+		async getEvidence(sessionId, evidenceId) {
+			const response = await this.requestJson(
+				`/api/sessions/${pathPart(sessionId)}/evidence/${pathPart(evidenceId)}`,
+			);
+			return asObject(response.data);
+		}
+
 		async getRequest(sessionId, requestId) {
 			const response = await this.requestJson(
 				`/api/sessions/${pathPart(sessionId)}/requests/${pathPart(requestId)}`,

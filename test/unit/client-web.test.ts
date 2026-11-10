@@ -70,6 +70,10 @@ class FakeElement {
 		return node === this || this.children.some((child) => child.contains(node));
 	}
 
+	closest(selector: string): FakeElement | null {
+		return selector === "[data-preview-evidence]" && this.dataset.previewEvidence ? this : null;
+	}
+
 	cloneNode(deep: boolean): FakeElement {
 		const clone = new FakeElement(this.ownerDocument);
 		clone.id = this.id;
@@ -224,6 +228,7 @@ class StubApi {
 	createSession = async (): Promise<UnknownRecord> => ({ sessionId: "seed" });
 	getSession = async (sessionId: string): Promise<UnknownRecord> => ({ sessionId });
 	getMessages = async (_sessionId?: string, _options?: UnknownRecord): Promise<UnknownRecord> => ({ messages: [] });
+	getEvidence = async (_sessionId?: string, evidenceId?: string): Promise<UnknownRecord> => ({ evidenceId });
 	getRequest = async (_sessionId?: string, _requestId?: string): Promise<UnknownRecord> => ({ status: "running" });
 	renameSession = async (sessionId: string, title: string): Promise<UnknownRecord> => ({ sessionId, title });
 	deleteSession = async (sessionId: string): Promise<UnknownRecord> => ({ sessionId, deleted: true });
@@ -251,10 +256,18 @@ type WebHarness = {
 	sessionList: FakeElement;
 	sessionTitle: FakeElement;
 	runStatus: FakeElement;
+	usageSummary: FakeElement;
+	usageDetails: FakeElement;
+	usageStatus: FakeElement;
 	deleteDialog: FakeElement;
 	deleteMessage: FakeElement;
 	deleteCancel: FakeElement;
 	renameDialog: FakeElement;
+	evidenceDialog: FakeElement;
+	evidenceTitle: FakeElement;
+	evidenceLocation: FakeElement;
+	evidenceText: FakeElement;
+	evidenceClose: FakeElement;
 	renameForm: FakeElement;
 	renameInput: FakeElement;
 	renameError: FakeElement;
@@ -286,6 +299,17 @@ async function loadWebHarness(): Promise<WebHarness> {
 		"refresh-sessions-btn",
 		"session-title",
 		"run-status",
+		"usage-summary",
+		"usage-details",
+		"usage-status",
+		"usage-input",
+		"usage-output",
+		"usage-cache-read",
+		"usage-cache-write",
+		"usage-total",
+		"usage-cost",
+		"usage-elapsed",
+		"usage-model",
 		"connection-dot",
 		"connection-title",
 		"connection-desc",
@@ -300,6 +324,14 @@ async function loadWebHarness(): Promise<WebHarness> {
 		"session-rename-error",
 		"session-rename-cancel",
 		"session-rename-save",
+		"evidence-dialog",
+		"evidence-preview-title",
+		"evidence-preview-kind",
+		"evidence-preview-location",
+		"evidence-preview-text",
+		"evidence-preview-error",
+		"evidence-preview-close",
+		"evidence-preview-link",
 	])
 		document.register(id);
 	// 测试替身复用真实模板中的问题文本，确保入口发送的内容与页面一致。
@@ -322,6 +354,11 @@ async function loadWebHarness(): Promise<WebHarness> {
 			timerCallbacks.push(callback);
 			return timerCallbacks.length;
 		},
+		setInterval: (callback: () => void) => {
+			timerCallbacks.push(callback);
+			return timerCallbacks.length;
+		},
+		clearInterval: () => undefined,
 		clearTimeout: () => undefined,
 		crypto: {
 			getRandomValues: (bytes: Uint8Array) => {
@@ -336,6 +373,14 @@ async function loadWebHarness(): Promise<WebHarness> {
 		renderMarkdown: (text: string) => {
 			const node = new FakeElement();
 			node.textContent = String(text);
+			for (const match of String(text).matchAll(/\[E:([A-Za-z0-9_-]+)\]/g)) {
+				const reference = document.createElement("button");
+				reference.className = "citation-link";
+				reference.dataset.evidenceId = match[1] || "";
+				reference.dataset.previewEvidence = "true";
+				reference.textContent = match[0];
+				node.appendChild(reference);
+			}
 			return node;
 		},
 		console,
@@ -360,6 +405,10 @@ async function loadWebHarness(): Promise<WebHarness> {
 
 		getMessages(sessionId: string, options?: UnknownRecord): Promise<UnknownRecord> {
 			return api.getMessages(sessionId, options);
+		}
+
+		getEvidence(sessionId: string, evidenceId: string): Promise<UnknownRecord> {
+			return api.getEvidence(sessionId, evidenceId);
 		}
 
 		renameSession(sessionId: string, title: string): Promise<UnknownRecord> {
@@ -400,10 +449,18 @@ async function loadWebHarness(): Promise<WebHarness> {
 		sessionList: document.getElementById("session-list") as FakeElement,
 		sessionTitle: document.getElementById("session-title") as FakeElement,
 		runStatus: document.getElementById("run-status") as FakeElement,
+		usageSummary: document.getElementById("usage-summary") as FakeElement,
+		usageDetails: document.getElementById("usage-details") as FakeElement,
+		usageStatus: document.getElementById("usage-status") as FakeElement,
 		deleteDialog: document.getElementById("session-delete-dialog") as FakeElement,
 		deleteMessage: document.getElementById("session-delete-message") as FakeElement,
 		deleteCancel: document.getElementById("session-delete-cancel") as FakeElement,
 		renameDialog: document.getElementById("session-rename-dialog") as FakeElement,
+		evidenceDialog: document.getElementById("evidence-dialog") as FakeElement,
+		evidenceTitle: document.getElementById("evidence-preview-title") as FakeElement,
+		evidenceLocation: document.getElementById("evidence-preview-location") as FakeElement,
+		evidenceText: document.getElementById("evidence-preview-text") as FakeElement,
+		evidenceClose: document.getElementById("evidence-preview-close") as FakeElement,
 		renameForm: document.getElementById("session-rename-form") as FakeElement,
 		renameInput: document.getElementById("session-rename-input") as FakeElement,
 		renameError: document.getElementById("session-rename-error") as FakeElement,
@@ -457,6 +514,193 @@ test("browser restores streaming follow mode after returning to the bottom or cl
 	assert.equal(harness.state.isFollowing, true);
 	assert.equal(harness.chatBox.lastScrollTo?.top, 500);
 	assert.equal(harness.jumpButton.hidden, true);
+});
+
+test("browser opens the full evidence preview from an inline citation without a source list", async () => {
+	const harness = await loadWebHarness();
+	harness.state.sessionId = "session-preview";
+	harness.input.value = "检查证据";
+	const previewCalls: Array<{ sessionId: string; evidenceId: string }> = [];
+	harness.api.sendMessage = async () => ({
+		kind: "stream",
+		status: 200,
+		final: {
+			status: "succeeded",
+			reply: "依据 [E:ev_preview1]，请确认板厚。",
+			sources: [{ evidenceId: "ev_preview1", sourceType: "knowledge_base", title: "规范", text: "片段" }],
+		},
+		lastEvent: null,
+	});
+	harness.api.getEvidence = async (sessionId, evidenceId) => {
+		previewCalls.push({ sessionId: sessionId || "", evidenceId: evidenceId || "" });
+		return {
+			evidenceId,
+			sourceType: "knowledge_base",
+			title: "线路缺陷判定规范",
+			text: "完整的内部知识库证据内容。\n包含排查条件与工艺依据。",
+			documentId: "doc-1",
+			chunkId: "chunk-9",
+			page: 4,
+		};
+	};
+	await (harness.controller.sendMessage as () => Promise<void>)();
+	assert.equal(harness.chatBox.querySelector(".sources-disclosure"), null);
+	assert.equal(harness.chatBox.querySelector(".source-preview-trigger"), null);
+	const citation = harness.chatBox.querySelector(".citation-link");
+	assert.ok(citation);
+	harness.chatBox.trigger("click", { target: citation });
+	await new Promise<void>((resolve) => setImmediate(resolve));
+	assert.deepEqual(previewCalls, [{ sessionId: "session-preview", evidenceId: "ev_preview1" }]);
+	assert.equal(harness.evidenceDialog.open, true);
+	assert.equal(harness.evidenceTitle.textContent, "线路缺陷判定规范");
+	assert.match(harness.evidenceLocation.textContent, /第 4 页/);
+	assert.match(harness.evidenceText.textContent, /完整的内部知识库证据内容/);
+	harness.evidenceClose.trigger("click");
+	assert.equal(harness.evidenceDialog.open, false);
+});
+
+test("browser does not render a separate evidence list when the answer omits inline citations", async () => {
+	const harness = await loadWebHarness();
+	harness.state.sessionId = "session-uncited-preview";
+	harness.input.value = "检查证据";
+	harness.api.sendMessage = async () => ({
+		kind: "stream",
+		status: 200,
+		final: {
+			status: "succeeded",
+			reply: "先确认是否露铜和划伤深度。",
+			citationValidation: { status: "not_applicable", invalidIds: [] },
+			sources: [{ evidenceId: "ev_preview1", sourceType: "knowledge_base", title: "规范", text: "片段" }],
+		},
+		lastEvent: null,
+	});
+	harness.api.getEvidence = async (_sessionId, evidenceId) => ({
+		evidenceId,
+		sourceType: "knowledge_base",
+		title: "线路缺陷判定规范",
+		text: "完整的内部知识库证据内容。",
+	});
+	await (harness.controller.sendMessage as () => Promise<void>)();
+	assert.equal(harness.chatBox.querySelector(".sources"), null);
+	assert.equal(harness.chatBox.querySelector(".citation-link"), null);
+});
+
+for (const history of [false, true]) {
+	for (const status of ["valid", "not_applicable", "invalid"]) {
+		test(`browser omits source lists for ${status} ${history ? "restored answers" : "new answers"}`, async () => {
+			const harness = await loadWebHarness();
+			const answer = {
+				status: "succeeded",
+				reply: "判定依据见 [E:ev_preview1]。",
+				sources: [{ evidenceId: "ev_preview1", sourceType: "knowledge_base", title: "工艺规范", text: "证据片段" }],
+				citationValidation: { status, invalidIds: status === "invalid" ? ["ev_missing"] : [] },
+			};
+			if (history) {
+				harness.api.getMessages = async () => ({
+					messages: [{ ...answer, entryId: "saved-answer", role: "assistant", content: answer.reply }],
+				});
+				await (harness.controller.selectSession as (sessionId: string) => Promise<void>)("history-sources");
+			} else {
+				harness.state.sessionId = "new-sources";
+				harness.input.value = "检查缺陷";
+				harness.api.sendMessage = async () => ({ kind: "stream", status: 200, final: answer, lastEvent: null });
+				await (harness.controller.sendMessage as () => Promise<void>)();
+			}
+			assert.equal(harness.chatBox.querySelector(".sources"), null);
+			assert.equal(harness.chatBox.querySelector(".source-preview-trigger"), null);
+			if (status === "invalid") {
+				assert.match(harness.chatBox.querySelector(".citation-warning")?.textContent || "", /ev_missing/);
+			} else assert.equal(harness.chatBox.querySelector(".citation-warning"), null);
+		});
+	}
+}
+
+test("browser streams estimated usage in the composer and replaces it with confirmed usage", async () => {
+	const harness = await loadWebHarness();
+	harness.state.sessionId = "session-usage";
+	harness.input.value = "统计用量";
+	let onEvent!: EventHandler;
+	let resolveSend!: (result: SendResult) => void;
+	harness.api.sendMessage = async (_sessionId, options) => {
+		onEvent = options.onEvent!;
+		return new Promise<SendResult>((resolve) => {
+			resolveSend = resolve;
+		});
+	};
+	const sending = (harness.controller.sendMessage as () => Promise<void>)();
+	await new Promise<void>((resolve) => setImmediate(resolve));
+	onEvent({ type: "message_delta", payload: { delta: "一个PCB异常分析响应" } });
+	assert.match(harness.usageSummary.textContent, /输出约/);
+	assert.equal(harness.usageStatus.dataset.state, "running");
+	onEvent({
+		type: "usage_snapshot",
+		payload: { usage: { input: 120, output: 30, cacheRead: 80, cacheWrite: 20, totalTokens: 250, cost: 0.000135 } },
+	});
+	assert.match(harness.usageSummary.textContent, /36\.4%/);
+	assert.match(harness.usageSummary.textContent, /输出 30/);
+	resolveSend({
+		kind: "stream",
+		status: 200,
+		final: {
+			status: "succeeded",
+			reply: "分析完成。",
+			model: "provider/model",
+			elapsedMs: 2431,
+			usage: { input: 120, output: 34, cacheRead: 80, cacheWrite: 20, totalTokens: 254, cost: 0.000145 },
+		},
+		lastEvent: null,
+	});
+	await sending;
+	assert.equal(harness.usageStatus.dataset.state, "complete");
+	assert.match(harness.usageSummary.textContent, /输出 34/);
+	assert.match(harness.usageSummary.textContent, /2\.4 秒/);
+	assert.equal(harness.chatBox.querySelector(".usage-details"), null);
+});
+
+test("browser shows usage in the composer without inventing a cache rate", async () => {
+	const harness = await loadWebHarness();
+	harness.state.sessionId = "session-no-cache-stats";
+	harness.input.value = "统计缓存";
+	harness.api.sendMessage = async () => ({
+		kind: "stream",
+		status: 200,
+		final: {
+			status: "succeeded",
+			reply: "分析完成。",
+			usage: { input: 120, output: 30, cacheRead: 0, cacheWrite: 0, totalTokens: 150, cost: 0 },
+		},
+		lastEvent: null,
+	});
+	await (harness.controller.sendMessage as () => Promise<void>)();
+
+	assert.match(harness.usageSummary.textContent, /缓存不可用/);
+	assert.doesNotMatch(harness.usageSummary.textContent, /\d+(?:\.\d+)?%/);
+	assert.equal(harness.chatBox.querySelector(".usage-details"), null);
+});
+
+test("browser restores the latest historical usage in the composer instead of the answer", async () => {
+	const harness = await loadWebHarness();
+	harness.api.getSession = async (sessionId) => ({ sessionId });
+	harness.api.getMessages = async () => ({
+		messages: [
+			{ entryId: "user-entry", role: "user", content: "之前的问题" },
+			{
+				entryId: "assistant-entry",
+				role: "assistant",
+				content: "之前的回答。",
+				status: "succeeded",
+				model: "provider/model",
+				elapsedMs: 1500,
+				usage: { input: 10, output: 5, cacheRead: 5, cacheWrite: 1, totalTokens: 21, cost: 0.00001 },
+			},
+		],
+	});
+	await (harness.controller.selectSession as (sessionId: string) => Promise<void>)("session-history-usage");
+
+	assert.match(harness.usageSummary.textContent, /31\.3%/);
+	assert.match(harness.usageSummary.textContent, /1\.5 秒/);
+	assert.equal(harness.usageStatus.dataset.state, "complete");
+	assert.equal(harness.chatBox.querySelector(".usage-details"), null);
 });
 
 test("browser grows the message input to its content and caps it with an internal scrollbar", async () => {
@@ -639,6 +883,63 @@ test("browser transport sends rename and delete session requests", async () => {
 		{ url: "https://example.test/api/sessions/s%2F1", method: "PATCH", body: JSON.stringify({ title: "新标题" }) },
 		{ url: "https://example.test/api/sessions/s%2F1", method: "DELETE", body: undefined },
 	]);
+});
+
+test("browser transport requests an evidence preview within its session scope", async () => {
+	const calls: Array<{ url: string; method: string }> = [];
+	const context = vm.createContext({
+		window: {
+			fetch: async (url: string, options: RequestInit = {}) => {
+				calls.push({ url, method: options.method || "GET" });
+				return new Response(JSON.stringify({ evidenceId: "ev_preview1", title: "工艺规范", text: "完整证据" }), {
+					status: 200,
+					headers: { "content-type": "application/json" },
+				});
+			},
+		},
+		URL,
+		Headers,
+		TextDecoder,
+		Response,
+	});
+	vm.runInContext(await readFile(new URL("../../web-ui/js/client.js", import.meta.url), "utf8"), context);
+	const api = vm.runInContext("new window.PcbApi({ baseUrl: 'https://example.test' })", context) as {
+		getEvidence: (sessionId: string, evidenceId: string) => Promise<UnknownRecord>;
+	};
+	assert.deepEqual(JSON.parse(JSON.stringify(await api.getEvidence("s/1", "ev_preview1"))), {
+		evidenceId: "ev_preview1",
+		title: "工艺规范",
+		text: "完整证据",
+	});
+	assert.deepEqual(calls, [{ url: "https://example.test/api/sessions/s%2F1/evidence/ev_preview1", method: "GET" }]);
+});
+
+test("markdown renders evidence references as buttons while leaving code references inert", async () => {
+	const document = new FakeDocument();
+	const context = vm.createContext({
+		window: {
+			marked: {
+				use: () => undefined,
+				lexer: () => [
+					{
+						type: "paragraph",
+						tokens: [
+							{ type: "text", text: "依据 [E:ev_ref123]，" },
+							{ type: "codespan", text: "[E:ev_code123]" },
+						],
+					},
+				],
+			},
+		},
+		document,
+	});
+	vm.runInContext(await readFile(new URL("../../web-ui/js/markdown.js", import.meta.url), "utf8"), context);
+	const output = (context.window as UnknownRecord).renderMarkdown as (value: string) => FakeElement;
+	const rendered = output("ignored");
+	const references = rendered.querySelectorAll(".citation-link");
+	assert.equal(references.length, 1);
+	assert.equal(references[0]?.dataset.evidenceId, "ev_ref123");
+	assert.equal(references[0]?.textContent, "[E:ev_ref123]");
 });
 
 // 请求被服务端以 4xx 拒绝时应释放活动状态，不为未接收的 requestId 继续轮询。

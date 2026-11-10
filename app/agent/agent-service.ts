@@ -3,6 +3,7 @@ import { basename, join } from "node:path";
 import type { ExtensionFactory } from "../../packages/coding-agent/src/core/extensions/types.ts";
 import type { AppConfig } from "../config.ts";
 import { AppError, type BusinessEvent, isTerminal, type RequestResult, requireId } from "../contracts/protocol.ts";
+import { projectEvidence, projectSources } from "../evidence/evidence-service.ts";
 import { adaptPiEvent } from "../runtime/event-adapter.ts";
 import { type AgentSession, type PiRuntime, type SessionEntry, SessionManager } from "../runtime/pi-runtime.ts";
 import { type LiveSession, SessionRegistry } from "../sessions/session-registry.ts";
@@ -29,7 +30,11 @@ export interface ServiceOptions {
 		manager: SessionManager;
 		getRun: () => RunContext | undefined;
 	}) => { extensions: ExtensionFactory[]; toolNames: string[] };
-	validate: (reply: string, entries: SessionEntry[]) => Pick<RequestResult, "sources" | "citationValidation">;
+	validate: (
+		reply: string,
+		entries: SessionEntry[],
+		requestEntries: SessionEntry[],
+	) => Pick<RequestResult, "sources" | "citationValidation">;
 	log?: (record: Record<string, unknown>) => void;
 }
 // active 记录一个正在执行的请求；键是 sessionId，因此同一会话始终只有一个活动请求。
@@ -108,6 +113,18 @@ export class AgentService {
 		const metadata = this.store.readSession(ownerId, id);
 		this.ensureAvailable(id);
 		return this.describe(metadata);
+	}
+	// 引用预览只从指定会话当前分支取回已保存证据，并沿用会话所有权校验。
+	getEvidence(ownerId: string, sessionId: string, evidenceId: string) {
+		const id = requireId(sessionId);
+		const metadata = this.store.readSession(ownerId, id);
+		this.ensureAvailable(id);
+		if (!/^ev_[A-Za-z0-9_-]+$/.test(evidenceId)) throw new AppError("EVIDENCE_NOT_FOUND", 404);
+		const evidence = projectEvidence(this.manager(metadata).getBranch()).find(
+			(item) => item.evidenceId === evidenceId,
+		);
+		if (!evidence) throw new AppError("EVIDENCE_NOT_FOUND", 404);
+		return projectSources([evidence])[0]!;
 	}
 	private describe(metadata: SessionMetadata) {
 		const active = this.active.get(metadata.sessionId);
@@ -192,6 +209,9 @@ export class AgentService {
 			status?: string;
 			sources?: RequestResult["sources"];
 			citationValidation?: RequestResult["citationValidation"];
+			model?: string;
+			usage?: RequestResult["usage"];
+			elapsedMs?: number;
 		}[] = [];
 		for (const entry of branch) {
 			// request_state 是请求边界；它把后续用户消息和最终助手回答关联起来。
@@ -212,15 +232,21 @@ export class AgentService {
 			if (message.role === "assistant") {
 				const request = answerRequests.get(entry.id);
 				// 中间助手或工具调用轮次不是独立的最终回答，只有已登记 answerEntryId 的消息对外可见。
-				if (request)
+				if (request) {
+					const result = this.project(metadata, request, branch);
 					messages.push({
 						entryId: entry.id,
 						requestId: request.requestId,
 						role: "assistant",
 						content: textOf(message),
 						status: request.status,
-						...this.options.validate(textOf(message), branch),
+						model: `${message.provider}/${message.model}`,
+						usage: result.usage,
+						elapsedMs: requestElapsedMs(request),
+						sources: result.sources,
+						citationValidation: result.citationValidation,
 					});
+				}
 			}
 		}
 		const end = before ? messages.findIndex((message) => message.entryId === before) : messages.length;
@@ -291,7 +317,12 @@ export class AgentService {
 	private project(metadata: SessionMetadata, request: RequestMetadata, entries?: SessionEntry[]): RequestResult {
 		const branch =
 			entries ?? (isTerminal(request.status) && request.answerEntryId ? this.manager(metadata).getBranch() : []);
-		const answer = branch.find((entry) => entry.id === request.answerEntryId);
+		const answerIndex = branch.findIndex((entry) => entry.id === request.answerEntryId);
+		const answer = branch[answerIndex];
+		// 回放旧回答时，引用只能使用当时已有的证据；未标注引用的检索资料限制在本轮请求内。
+		const evidenceEntries = answerIndex >= 0 ? branch.slice(0, answerIndex + 1) : [];
+		const requestStart = evidenceEntries.findIndex((entry) => entry.id === request.startEntryId);
+		const requestEntries = requestStart >= 0 ? evidenceEntries.slice(requestStart + 1) : [];
 		const reply = answer?.type === "message" && answer.message.role === "assistant" ? textOf(answer.message) : "";
 		const usageEntries = request.startEntryId
 			? branch.slice(branch.findIndex((entry) => entry.id === request.startEntryId) + 1)
@@ -327,10 +358,11 @@ export class AgentService {
 			requestId: request.requestId,
 			status: request.status,
 			reply,
-			...this.options.validate(reply, branch),
+			...this.options.validate(reply, evidenceEntries, requestEntries),
 			errorCode: request.errorCode,
 			model: message ? `${message.provider}/${message.model}` : undefined,
 			usage,
+			elapsedMs: requestElapsedMs(request),
 		};
 	}
 	// 受理请求时先校验、持久化并占用会话，再异步启动执行；相同 requestId 通过消息哈希幂等返回。
@@ -462,6 +494,7 @@ export class AgentService {
 			run.metadata.status = "running";
 			run.metadata.startEntryId = live.manager.appendCustomEntry("pcb.request_state", { ...run.metadata });
 			this.store.writeRequest(metadata.ownerId, metadata.sessionId, run.metadata);
+			const usageManager = live.manager;
 			const beforeIds = new Set(live.manager.getBranch().map((entry) => entry.id));
 			unsubscribe = live.session.subscribe((event) => {
 				if (event.type === "compaction_start") run.compactionFailed = false;
@@ -469,6 +502,51 @@ export class AgentService {
 				if (event.type === "compaction_end" && run.compactionFailed)
 					emit("context_compacted", { reason: event.reason, status: "failed", errorCode: "COMPACTION_FAILED" });
 				else if (mapped) emit(mapped.type, mapped.payload);
+				if (
+					(event.type === "message_update" || event.type === "message_end") &&
+					event.message.role === "assistant" &&
+					event.message.usage.totalTokens > 0
+				) {
+					const branch = usageManager.getBranch();
+					const startIndex = branch.findIndex((entry) => entry.id === run.metadata.startEntryId);
+					const usage = {
+						input: 0,
+						output: 0,
+						cacheRead: 0,
+						cacheWrite: 0,
+						totalTokens: 0,
+						cost: 0,
+					};
+					const addUsage = (current: typeof event.message.usage) => {
+						usage.input += current.input;
+						usage.output += current.output;
+						usage.cacheRead += current.cacheRead;
+						usage.cacheWrite += current.cacheWrite;
+						usage.totalTokens += current.totalTokens;
+						usage.cost += current.cost.total;
+					};
+					let currentMessagePersisted = false;
+					for (const entry of branch.slice(Math.max(0, startIndex + 1))) {
+						if (entry.type === "custom" && entry.customType === "pcb.request_state") break;
+						if (entry.type === "message" && entry.message.role === "assistant") {
+							addUsage(entry.message.usage);
+							currentMessagePersisted ||= entry.message === event.message;
+						}
+					}
+					if (!currentMessagePersisted) addUsage(event.message.usage);
+					if (usage.totalTokens <= 0) return;
+					emit("usage_snapshot", {
+						model: `${event.message.provider}/${event.message.model}`,
+						usage: {
+							input: usage.input,
+							output: usage.output,
+							cacheRead: usage.cacheRead,
+							cacheWrite: usage.cacheWrite,
+							totalTokens: usage.totalTokens,
+							cost: usage.cost,
+						},
+					});
+				}
 				if (["tool_execution_end", "compaction_end", "auto_retry_start"].includes(event.type))
 					this.options.log?.({
 						sessionId: metadata.sessionId,
@@ -628,6 +706,10 @@ function titleFromMessage(message: string): string {
 	const source = sentence || characters.join("");
 	const title = Array.from(source).slice(0, 20).join("");
 	return source.length > title.length ? `${title}…` : title;
+}
+function requestElapsedMs(request: RequestMetadata): number | undefined {
+	const elapsedMs = Date.parse(request.updatedAt) - Date.parse(request.createdAt);
+	return Number.isFinite(elapsedMs) ? Math.max(0, elapsedMs) : undefined;
 }
 // Pi 消息内容可能是纯字符串或多段内容；这里只提取文本段供业务协议使用。
 function textOf(message: { content?: unknown }): string {
