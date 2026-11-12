@@ -748,7 +748,7 @@ select:focus-visible,
     background-clip: padding-box;
 }
 
-.chat-box > * {
+.chat-box>* {
     width: min(100%, var(--content-width));
     margin-right: auto;
     margin-left: auto;
@@ -889,7 +889,7 @@ select:focus-visible,
     font-weight: 650;
 }
 
-.suggestions h2 + .suggestion-grid {
+.suggestions h2+.suggestion-grid {
     margin-top: 13px;
 }
 
@@ -1158,11 +1158,11 @@ select:focus-visible,
     overflow-wrap: anywhere;
 }
 
-.md-body > :first-child {
+.md-body> :first-child {
     margin-top: 0;
 }
 
-.md-body > :last-child {
+.md-body> :last-child {
     margin-bottom: 0;
 }
 
@@ -1213,17 +1213,17 @@ select:focus-visible,
     padding-left: 24px;
 }
 
-.md-body li + li {
+.md-body li+li {
     margin-top: 4px;
 }
 
-.md-body li > ul,
-.md-body li > ol {
+.md-body li>ul,
+.md-body li>ol {
     margin-top: 4px;
     margin-bottom: 0;
 }
 
-.md-body li > input[type="checkbox"] {
+.md-body li>input[type="checkbox"] {
     margin: 0 6px 0 0;
     vertical-align: -1px;
     accent-color: var(--navy-700);
@@ -1298,7 +1298,7 @@ select:focus-visible,
     color: var(--text-muted);
 }
 
-.md-body blockquote > :last-child {
+.md-body blockquote> :last-child {
     margin-bottom: 0;
 }
 
@@ -1419,8 +1419,8 @@ select:focus-visible,
     background: transparent;
 }
 
-.composer-region > .jump-to-latest,
-.composer-region > .input-area {
+.composer-region>.jump-to-latest,
+.composer-region>.input-area {
     pointer-events: auto;
 }
 
@@ -1811,16 +1811,50 @@ select:focus-visible,
 
 /* 低高度桌面压缩欢迎区留白，让四个常见问题与输入框完整出现在首屏。 */
 @media (min-width: 1101px) and (max-height: 800px) {
-    .chat-box { padding-top: 20px; padding-bottom: 16px; }
-    .welcome-card { padding: 24px 30px; }
-    .welcome-main { gap: 28px; }
-    .welcome-copy h1 { font-size: 28px; }
-    .welcome-copy p { margin-top: 12px; font-size: 13px; }
-    .pcb-illustration { width: 180px; }
-    .capabilities { margin-top: 20px; padding-top: 16px; }
-    .suggestions { margin-top: 20px; }
-    .suggestion-grid { gap: 8px; }
-    .suggestion-card { min-height: 64px; padding-top: 10px; padding-bottom: 10px; }
+    .chat-box {
+        padding-top: 20px;
+        padding-bottom: 16px;
+    }
+
+    .welcome-card {
+        padding: 24px 30px;
+    }
+
+    .welcome-main {
+        gap: 28px;
+    }
+
+    .welcome-copy h1 {
+        font-size: 28px;
+    }
+
+    .welcome-copy p {
+        margin-top: 12px;
+        font-size: 13px;
+    }
+
+    .pcb-illustration {
+        width: 180px;
+    }
+
+    .capabilities {
+        margin-top: 20px;
+        padding-top: 16px;
+    }
+
+    .suggestions {
+        margin-top: 20px;
+    }
+
+    .suggestion-grid {
+        gap: 8px;
+    }
+
+    .suggestion-card {
+        min-height: 64px;
+        padding-top: 10px;
+        padding-bottom: 10px;
+    }
 }
 
 @media (min-width: 761px) and (max-width: 1100px) {
@@ -2090,6 +2124,7 @@ select:focus-visible,
 
 /* 用户关闭动画时保持状态变化可读，但不让动效造成干扰。 */
 @media (prefers-reduced-motion: reduce) {
+
     *,
     *::before,
     *::after {
@@ -2102,4 +2137,118 @@ select:focus-visible,
 
 @media (prefers-reduced-motion: reduce) {
     .evidence-dialog[open] { animation: none; }
+}
+/* 语音输入按钮 */
+#voice-btn {
+    display: inline-flex;
+    width: 44px;
+    height: 44px;
+    flex-shrink: 0;
+    align-items: center;
+    justify-content: center;
+    border: 1px solid #d3a457;
+    border-radius: 11px;
+    background: #fffaf1;
+    color: #0b2538;
+    cursor: pointer;
+}
+
+#voice-btn:hover {
+    background: #f8edd8;
+}
+
+#voice-btn svg {
+    width: 20px;
+    height: 20px;
+}
+
+#voice-btn[data-state="recording"] {
+    border-color: #cc4545;
+    background: #fff0f0;
+    color: #ba3030;
+}
+
+#voice-btn:disabled {
+    opacity: 0.55;
+    cursor: wait;
+}
+
+/* 录音期间暂时禁止发送消息 */
+body[data-voice-busy="true"] #send-btn {
+    pointer-events: none;
+    opacity: 0.45;
+}
+
+/* 录音状态 */
+#voice-status {
+    min-height: 18px;
+    margin: 6px 0 0;
+    color: #687b8d;
+    font-size: 12px;
+    line-height: 1.5;
+}
+
+#voice-status[data-error="true"] {
+    color: #ba3030;
+}
+
+/* 首次录音的 Key 和热词设置 */
+#voice-dialog {
+    box-sizing: border-box;
+    width: min(420px, calc(100vw - 32px));
+    padding: 24px;
+    border: 1px solid #d3a457;
+    border-radius: 16px;
+    background: #fff;
+    color: #0b2538;
+    box-shadow: 0 20px 70px #0003;
+}
+
+#voice-dialog::backdrop {
+    background: #0005;
+}
+
+#voice-dialog h3 {
+    margin: 0 0 12px;
+}
+
+#voice-dialog p {
+    color: #687b8d;
+    font-size: 12px;
+    line-height: 1.7;
+}
+
+#voice-dialog label {
+    display: block;
+    margin: 14px 0;
+    font-size: 13px;
+}
+
+#voice-dialog input {
+    display: block;
+    box-sizing: border-box;
+    width: 100%;
+    margin-top: 6px;
+    padding: 10px;
+    border: 1px solid #cdd6df;
+    border-radius: 8px;
+}
+
+#voice-dialog .voice-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 8px;
+}
+
+#voice-dialog button {
+    padding: 9px 16px;
+    border: 1px solid #d3a457;
+    border-radius: 8px;
+    background: #fffaf1;
+    color: #0b2538;
+    cursor: pointer;
+}
+
+#voice-dialog button[type="submit"] {
+    background: #d3a457;
 }
