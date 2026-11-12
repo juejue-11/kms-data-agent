@@ -1097,11 +1097,14 @@ select:focus-visible,
 }
 
 .composer-usage-details > summary {
+	display: block;
 	width: fit-content;
 	max-width: 100%;
 	line-height: 1.5;
 	cursor: pointer;
-	overflow-wrap: anywhere;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
 }
 
 .composer-usage-details > summary:hover {
@@ -1134,6 +1137,15 @@ select:focus-visible,
 	min-width: 0;
 	justify-content: space-between;
 	gap: 8px;
+}
+
+.composer-usage-note {
+	margin: 9px 0 0;
+	padding-top: 7px;
+	border-top: 1px solid var(--line);
+	color: var(--text-faint);
+	font-size: 10px;
+	line-height: 1.5;
 }
 
 .composer-usage-popover dt {
@@ -1388,19 +1400,33 @@ select:focus-visible,
 }
 
 .citation-link {
-    padding: 0 1px;
-    border: 0;
-    border-radius: 2px;
-    color: var(--navy-700);
-    background: transparent;
-    font-size: inherit;
-    font-weight: 650;
-    text-decoration: underline dotted;
-    text-underline-offset: 2px;
+    display: inline-grid;
+    width: 1.5em;
+    height: 1.5em;
+    place-items: center;
+    margin: 0 2px;
+    padding: 0;
+    border: 1px solid #a8d0bb;
+    border-radius: 50%;
+    color: #246344;
+    background: #e8f4ed;
+    font-size: 0.76em;
+    font-weight: 700;
+    line-height: 1;
+    vertical-align: 0.08em;
+    cursor: pointer;
 }
 
-.citation-link:hover {
-    color: #9c6d1d;
+.citation-link:hover,
+.citation-link:focus-visible {
+    border-color: #438b65;
+    color: #174a2f;
+    background: #d6ebdf;
+}
+
+.citation-link:focus-visible {
+    outline: 2px solid #438b65;
+    outline-offset: 2px;
 }
 
 /* ===== 底部输入区 ===== */
@@ -1737,7 +1763,11 @@ select:focus-visible,
     font-size: 14px;
     line-height: 1.8;
     overflow-wrap: anywhere;
-    white-space: pre-wrap;
+    white-space: normal;
+}
+
+.evidence-preview-text > .md-body {
+    max-width: 100%;
 }
 
 .evidence-preview-footer {

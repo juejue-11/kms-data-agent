@@ -306,6 +306,7 @@ async function loadWebHarness(): Promise<WebHarness> {
 		"usage-output",
 		"usage-cache-read",
 		"usage-cache-write",
+		"usage-cache-rate",
 		"usage-total",
 		"usage-cost",
 		"usage-elapsed",
@@ -381,6 +382,12 @@ async function loadWebHarness(): Promise<WebHarness> {
 				reference.textContent = match[0];
 				node.appendChild(reference);
 			}
+			return node;
+		},
+		renderEvidenceMarkdown: (text: string) => {
+			const node = new FakeElement();
+			node.className = "md-body";
+			node.textContent = String(text);
 			return node;
 		},
 		console,
@@ -537,7 +544,7 @@ test("browser opens the full evidence preview from an inline citation without a 
 			evidenceId,
 			sourceType: "knowledge_base",
 			title: "线路缺陷判定规范",
-			text: "完整的内部知识库证据内容。\n包含排查条件与工艺依据。",
+			text: "## 诊断增强\n<table><thead><tr><th>观察特征</th></tr></thead><tbody></tbody></table>",
 			documentId: "doc-1",
 			chunkId: "chunk-9",
 			page: 4,
@@ -554,7 +561,8 @@ test("browser opens the full evidence preview from an inline citation without a 
 	assert.equal(harness.evidenceDialog.open, true);
 	assert.equal(harness.evidenceTitle.textContent, "线路缺陷判定规范");
 	assert.match(harness.evidenceLocation.textContent, /第 4 页/);
-	assert.match(harness.evidenceText.textContent, /完整的内部知识库证据内容/);
+	assert.equal(harness.evidenceText.children[0]?.className, "md-body");
+	assert.match(harness.evidenceText.children[0]?.textContent || "", /<table>/);
 	harness.evidenceClose.trigger("click");
 	assert.equal(harness.evidenceDialog.open, false);
 });
@@ -630,14 +638,16 @@ test("browser streams estimated usage in the composer and replaces it with confi
 	const sending = (harness.controller.sendMessage as () => Promise<void>)();
 	await new Promise<void>((resolve) => setImmediate(resolve));
 	onEvent({ type: "message_delta", payload: { delta: "一个PCB异常分析响应" } });
-	assert.match(harness.usageSummary.textContent, /输出约/);
+	assert.match(harness.usageSummary.textContent, /^生成中 · .* 秒$/);
+	assert.doesNotMatch(harness.usageSummary.textContent, /token|输出约/);
+	assert.match(harness.document.getElementById("usage-output")?.textContent || "", /^约 /);
 	assert.equal(harness.usageStatus.dataset.state, "running");
 	onEvent({
 		type: "usage_snapshot",
 		payload: { usage: { input: 120, output: 30, cacheRead: 80, cacheWrite: 20, totalTokens: 250, cost: 0.000135 } },
 	});
-	assert.match(harness.usageSummary.textContent, /36\.4%/);
-	assert.match(harness.usageSummary.textContent, /输出 30/);
+	assert.match(harness.usageSummary.textContent, /^生成中 · .* 秒$/);
+	assert.equal(harness.document.getElementById("usage-cache-rate")?.textContent, "36.4%");
 	resolveSend({
 		kind: "stream",
 		status: 200,
@@ -652,8 +662,10 @@ test("browser streams estimated usage in the composer and replaces it with confi
 	});
 	await sending;
 	assert.equal(harness.usageStatus.dataset.state, "complete");
-	assert.match(harness.usageSummary.textContent, /输出 34/);
+	assert.match(harness.usageSummary.textContent, /上轮 · 254 token · ￥0\.00104 · 2\.4 秒/);
+	assert.doesNotMatch(harness.usageSummary.textContent, /输入|输出|缓存/);
 	assert.match(harness.usageSummary.textContent, /2\.4 秒/);
+	assert.equal(harness.document.getElementById("usage-cost")?.textContent, "￥0.00104");
 	assert.equal(harness.chatBox.querySelector(".usage-details"), null);
 });
 
@@ -673,9 +685,69 @@ test("browser shows usage in the composer without inventing a cache rate", async
 	});
 	await (harness.controller.sendMessage as () => Promise<void>)();
 
-	assert.match(harness.usageSummary.textContent, /缓存不可用/);
-	assert.doesNotMatch(harness.usageSummary.textContent, /\d+(?:\.\d+)?%/);
+	assert.match(harness.usageSummary.textContent, /上轮 · 150 token · ￥0 ·/);
+	assert.equal(harness.document.getElementById("usage-cache-rate")?.textContent, "0.0%");
+	assert.equal(harness.document.getElementById("usage-cache-read")?.textContent, "0");
 	assert.equal(harness.chatBox.querySelector(".usage-details"), null);
+});
+
+test("browser labels missing cache counters as unavailable", async () => {
+	const harness = await loadWebHarness();
+	harness.state.sessionId = "session-cache-unavailable";
+	harness.input.value = "统计缓存";
+	harness.api.sendMessage = async () => ({
+		kind: "stream",
+		status: 200,
+		final: {
+			status: "succeeded",
+			reply: "分析完成。",
+			usage: { input: 120, output: 30, totalTokens: 150, cost: 0 },
+		},
+		lastEvent: null,
+	});
+	await (harness.controller.sendMessage as () => Promise<void>)();
+
+	assert.equal(harness.document.getElementById("usage-cache-rate")?.textContent, "不可用");
+	assert.equal(harness.document.getElementById("usage-cache-read")?.textContent, "不可用");
+});
+
+test("browser explains model connection failures without exposing only an internal code", async () => {
+	const harness = await loadWebHarness();
+	harness.state.sessionId = "session-model-connection-error";
+	harness.input.value = "测试模型连接";
+	harness.api.sendMessage = async () => ({
+		kind: "stream",
+		status: 200,
+		final: { status: "failed", errorCode: "MODEL_CONNECTION_ERROR" },
+		lastEvent: null,
+	});
+	await (harness.controller.sendMessage as () => Promise<void>)();
+
+	const assistant = harness.chatBox.children.at(-1);
+	assert.equal(
+		assistant?.querySelector(".msg-text")?.children[0]?.textContent,
+		"模型服务连接失败，请检查本机网络或代理设置后重试。",
+	);
+});
+
+test("browser opens usage details on hover and closes them on pointer leave or Escape", async () => {
+	const harness = await loadWebHarness();
+	let prevented = false;
+	harness.usageDetails.trigger("pointerenter", { pointerType: "mouse" });
+	assert.equal(harness.usageDetails.open, true);
+	harness.document.getElementById("usage-summary")?.trigger("click", {
+		preventDefault: () => {
+			prevented = true;
+		},
+	});
+	assert.equal(prevented, true);
+	assert.equal(harness.usageDetails.open, true);
+	harness.usageDetails.trigger("pointerleave", { pointerType: "mouse" });
+	assert.equal(harness.usageDetails.open, false);
+	harness.usageDetails.trigger("focusin");
+	assert.equal(harness.usageDetails.open, true);
+	harness.usageDetails.trigger("keydown", { key: "Escape" });
+	assert.equal(harness.usageDetails.open, false);
 });
 
 test("browser restores the latest historical usage in the composer instead of the answer", async () => {
@@ -697,7 +769,8 @@ test("browser restores the latest historical usage in the composer instead of th
 	});
 	await (harness.controller.selectSession as (sessionId: string) => Promise<void>)("session-history-usage");
 
-	assert.match(harness.usageSummary.textContent, /31\.3%/);
+	assert.match(harness.usageSummary.textContent, /上轮 · 21 token · ￥0\.000072 · 1\.5 秒/);
+	assert.equal(harness.document.getElementById("usage-cache-rate")?.textContent, "31.3%");
 	assert.match(harness.usageSummary.textContent, /1\.5 秒/);
 	assert.equal(harness.usageStatus.dataset.state, "complete");
 	assert.equal(harness.chatBox.querySelector(".usage-details"), null);
@@ -924,7 +997,7 @@ test("markdown renders evidence references as buttons while leaving code referen
 					{
 						type: "paragraph",
 						tokens: [
-							{ type: "text", text: "依据 [E:ev_ref123]，" },
+							{ type: "text", text: "依据 [E:ev_ref123]，另见 [E:ev_other456]。" },
 							{ type: "codespan", text: "[E:ev_code123]" },
 						],
 					},
@@ -937,9 +1010,143 @@ test("markdown renders evidence references as buttons while leaving code referen
 	const output = (context.window as UnknownRecord).renderMarkdown as (value: string) => FakeElement;
 	const rendered = output("ignored");
 	const references = rendered.querySelectorAll(".citation-link");
-	assert.equal(references.length, 1);
-	assert.equal(references[0]?.dataset.evidenceId, "ev_ref123");
-	assert.equal(references[0]?.textContent, "[E:ev_ref123]");
+	assert.equal(references.length, 2);
+	assert.deepEqual(
+		references.map((reference) => reference.dataset.evidenceId),
+		["ev_ref123", "ev_other456"],
+	);
+	assert.deepEqual(
+		references.map((reference) => reference.textContent),
+		["1", "2"],
+	);
+	assert.equal(references[0]?.dataset["aria-label"], "预览引用材料 1（ev_ref123）");
+	assert.equal(references[1]?.dataset["aria-label"], "预览引用材料 2（ev_other456）");
+});
+
+test("evidence markdown converts structured HTML tables to readable markdown rows", async () => {
+	let parsedMarkdown = "";
+	const rows = [
+		[
+			{ tagName: "TH", textContent: "观察特征" },
+			{ tagName: "TH", textContent: "可能原因" },
+		],
+		[
+			{ tagName: "TD", textContent: "坐标桥重复" },
+			{ tagName: "TD", textContent: "底片或曝光数据错误" },
+		],
+	];
+	class TableDOMParser {
+		parseFromString(_source: string, _type: string) {
+			return {
+				querySelector: () => ({
+					querySelectorAll: () => rows.map((cells) => ({ querySelectorAll: () => cells })),
+				}),
+			};
+		}
+	}
+	const context = vm.createContext({
+		window: {
+			marked: {
+				use: () => undefined,
+				lexer: (source: string) => {
+					parsedMarkdown = source;
+					return [];
+				},
+			},
+		},
+		document: new FakeDocument(),
+		DOMParser: TableDOMParser,
+	});
+	vm.runInContext(await readFile(new URL("../../web-ui/js/markdown.js", import.meta.url), "utf8"), context);
+	const renderEvidenceMarkdown = (context.window as UnknownRecord).renderEvidenceMarkdown as (
+		value: string,
+	) => FakeElement;
+	const rendered = renderEvidenceMarkdown(
+		"## 诊断增强\n<table><thead><tr><th>观察特征</th></tr></thead><tbody></tbody></table>",
+	);
+	assert.equal(rendered.className, "md-body");
+	assert.match(parsedMarkdown, /## 诊断增强/);
+	assert.match(parsedMarkdown, /\| 观察特征 \| 可能原因 \|/);
+	assert.match(parsedMarkdown, /\| 坐标桥重复 \| 底片或曝光数据错误 \|/);
+	assert.doesNotMatch(parsedMarkdown, /<\/?(?:table|thead|tbody|tr|th|td)\b/i);
+});
+
+test("CSV evidence renders Data records and quoted CSV rows as readable tables", async () => {
+	const parsedMarkdown: string[] = [];
+	const context = vm.createContext({
+		window: {
+			marked: {
+				use: () => undefined,
+				lexer: (source: string) => {
+					parsedMarkdown.push(source);
+					return [];
+				},
+			},
+		},
+		document: new FakeDocument(),
+	});
+	vm.runInContext(await readFile(new URL("../../web-ui/js/markdown.js", import.meta.url), "utf8"), context);
+	const renderEvidenceMarkdown = (context.window as UnknownRecord).renderEvidenceMarkdown as (
+		value: string,
+		title: string,
+	) => FakeElement;
+	renderEvidenceMarkdown(
+		"编号: DEF-001; 缺陷: 线路开路; 类别: 线路; 工序: 曝光、蚀刻; 文件: DEF-001.md ——Data 编号: DEF-002; 缺陷: 线路短路; 类别: 线路; 工序: 压合; 文件: DEF-002.md",
+		"缺陷索引.csv",
+	);
+	renderEvidenceMarkdown('编号,缺陷,说明\nDEF-003,缺陷,"线间距,桥连"', "缺陷列表.csv");
+	assert.match(parsedMarkdown[0] || "", /\| 编号 \| 缺陷 \| 类别 \| 工序 \| 文件 \|/);
+	assert.match(parsedMarkdown[0] || "", /\| DEF-001 \| 线路开路 \| 线路 \| 曝光、蚀刻 \| DEF-001\.md \|/);
+	assert.match(parsedMarkdown[0] || "", /\| DEF-002 \| 线路短路 \| 线路 \| 压合 \| DEF-002\.md \|/);
+	assert.match(parsedMarkdown[1] || "", /\| DEF-003 \| 缺陷 \| 线间距,桥连 \|/);
+	assert.equal(parsedMarkdown[2], undefined);
+});
+
+test("evidence preview formats structured text, pretty-prints JSON, and preserves code-like files", async () => {
+	const parsedMarkdown: string[] = [];
+	const context = vm.createContext({
+		window: {
+			marked: {
+				use: () => undefined,
+				lexer: (source: string) => {
+					parsedMarkdown.push(source);
+					return [];
+				},
+			},
+		},
+		document: new FakeDocument(),
+	});
+	vm.runInContext(await readFile(new URL("../../web-ui/js/markdown.js", import.meta.url), "utf8"), context);
+	const renderEvidenceMarkdown = (context.window as UnknownRecord).renderEvidenceMarkdown as (
+		value: string,
+		title: string,
+	) => FakeElement;
+	renderEvidenceMarkdown(
+		"## 缺陷类别：阻焊\n阻焊 | 非BGA区域不允许 | 1. 离BGA和SMD区域5mm内不允许 2. 缺点大小1.25mm以内 | 目视/十倍镜 | ★ | 阻焊 | 绿油上PAD | 1. 绿油不允许入插件孔 2. 上金手指或感光点表面不允许",
+		"缺陷说明.txt",
+	);
+	assert.match(parsedMarkdown[0] || "", /## 缺陷类别：阻焊/);
+	assert.match(parsedMarkdown[0] || "", /### 阻焊/);
+	assert.match(parsedMarkdown[0] || "", /适用条件：.*非BGA区域不允许/);
+	assert.match(parsedMarkdown[0] || "", /1\. 离BGA和SMD区域5mm内不允许\n2\. 缺点大小1\.25mm以内/);
+	assert.match(parsedMarkdown[0] || "", /检查方法：.*目视\/十倍镜/);
+	assert.match(parsedMarkdown[0] || "", /### ★ 阻焊 · 绿油上PAD/);
+	assert.match(parsedMarkdown[0] || "", /1\. 绿油不允许入插件孔\n2\. 上金手指或感光点表面不允许/);
+	renderEvidenceMarkdown("普通说明 | 仅有两个字段", "说明.txt");
+	assert.equal(parsedMarkdown[1], "普通说明 | 仅有两个字段");
+
+	const formattedJson = renderEvidenceMarkdown('{"name":"DEF-001","rules":[1,2]}', "defect.json");
+	assert.equal(formattedJson.className, "md-code");
+	assert.match(formattedJson.children[1]?.children[0]?.textContent || "", /\n {2}"rules": \[/);
+	const invalidJson = renderEvidenceMarkdown("{not valid json", "broken.json");
+	assert.equal(invalidJson.className, "md-body");
+	assert.equal(parsedMarkdown[2], "{not valid json");
+
+	for (const title of ["rule.xml", "process.yaml", "process.yml", "service.log"]) {
+		const rendered = renderEvidenceMarkdown("line one\nline two", title);
+		assert.equal(rendered.className, "md-code");
+		assert.equal(rendered.children[1]?.children[0]?.textContent, "line one\nline two");
+	}
 });
 
 // 请求被服务端以 4xx 拒绝时应释放活动状态，不为未接收的 requestId 继续轮询。

@@ -11,6 +11,9 @@ const FENCE_OPEN_REGEX = /^( {0,3})(`{3,}|~{3,})(.*)$/;
 const FENCE_CLOSE_REGEX = /^ {0,3}(`{3,}|~{3,})\s*$/;
 const TABLE_DELIMITER_CELL_REGEX = /^:?-+:?$/;
 const EVIDENCE_CITATION_REGEX = /\[E:(ev_[A-Za-z0-9_-]+)\]/g;
+const HTML_TABLE_REGEX = /<table\b[^>]*>[\s\S]*?<\/table\s*>/gi;
+const CSV_RECORD_SEPARATOR_REGEX = /\s*——\s*Data\s*/i;
+let citationIndex = 0;
 
 /**
  * 清洗链接地址：去掉控制字符，只放行常见安全协议；相对路径与锚点保持原样。
@@ -103,6 +106,175 @@ function normalizeMarkdown(source) {
 	return output.join("\n");
 }
 
+function normalizeEvidenceTables(source) {
+	if (!HTML_TABLE_REGEX.test(source) || typeof DOMParser !== "function") return source;
+	HTML_TABLE_REGEX.lastIndex = 0;
+	return source.replace(HTML_TABLE_REGEX, (markup) => {
+		const table = new DOMParser().parseFromString(markup, "text/html").querySelector("table");
+		if (!table) return markup;
+		const rows = [...table.querySelectorAll("tr")]
+			.map((row) =>
+				[...row.querySelectorAll("th, td")].map((cell) =>
+					escapeTableCell(
+						String(cell.textContent || "")
+							.replace(/\s+/g, " ")
+							.trim(),
+					),
+				),
+			)
+			.filter((row) => row.length > 0);
+		if (rows.length === 0) return "";
+		return `\n\n${formatMarkdownTable(rows)}\n\n`;
+	});
+}
+
+function escapeTableCell(value) {
+	return value
+		.replace(/\s+/g, " ")
+		.trim()
+		.replace(/\\/g, "\\\\")
+		.replace(/([|*_`[\]()~])/g, "\\$1");
+}
+
+function formatMarkdownTable(rows) {
+	const width = Math.max(...rows.map((row) => row.length));
+	const formatRow = (row) => `| ${Array.from({ length: width }, (_, index) => row[index] || "").join(" | ")} |`;
+	return `${formatRow(rows[0])}\n${formatRow(Array(width).fill("---"))}${rows
+		.slice(1)
+		.map((row) => `\n${formatRow(row)}`)
+		.join("")}`;
+}
+
+function parseKeyValueRecords(source) {
+	const records = source
+		.replace(/^\uFEFF/, "")
+		.split(CSV_RECORD_SEPARATOR_REGEX)
+		.map((record) => record.replace(/^\s*Data\s+/i, "").trim())
+		.filter(Boolean);
+	const keys = [];
+	const parsed = [];
+	for (const record of records) {
+		const fields = record.split(/[;；]\s*/).map((field) => {
+			const separator = field.search(/[:：]/);
+			if (separator < 1) return null;
+			const key = field
+				.slice(0, separator)
+				.replace(/^\s*Data\s+/i, "")
+				.trim();
+			const value = field.slice(separator + 1).trim();
+			if (!key) return null;
+			if (!keys.includes(key)) keys.push(key);
+			return { key, value };
+		});
+		if (fields.some((field) => field === null)) return null;
+		parsed.push(Object.fromEntries(fields.map((field) => [field.key, escapeTableCell(field.value)])));
+	}
+	return keys.length > 1 ? [keys, parsed.map((record) => keys.map((key) => record[key] || ""))] : null;
+}
+
+function parseCsvRows(source) {
+	const rows = [];
+	let row = [];
+	let value = "";
+	let quoted = false;
+	const text = source.replace(/^\uFEFF/, "");
+	for (let index = 0; index < text.length; index += 1) {
+		const character = text[index];
+		if (quoted) {
+			if (character === '"' && text[index + 1] === '"') {
+				value += '"';
+				index += 1;
+			} else if (character === '"') quoted = false;
+			else value += character;
+		} else if (character === '"' && value.length === 0) quoted = true;
+		else if (character === ",") {
+			row.push(value.trim());
+			value = "";
+		} else if (character === "\n" || character === "\r") {
+			if (character === "\r" && text[index + 1] === "\n") index += 1;
+			row.push(value.trim());
+			if (row.some(Boolean)) rows.push(row);
+			row = [];
+			value = "";
+		} else value += character;
+	}
+	if (quoted) return null;
+	row.push(value.trim());
+	if (row.some(Boolean)) rows.push(row);
+	const width = rows[0]?.length || 0;
+	return rows.length > 1 && width > 1 && rows.every((item) => item.length === width)
+		? rows.map((item) => item.map(escapeTableCell))
+		: null;
+}
+
+function normalizeEvidenceCsv(source) {
+	const keyValueRows = parseKeyValueRecords(source);
+	if (keyValueRows)
+		return `\n\n${formatMarkdownTable([keyValueRows[0].map(escapeTableCell), ...keyValueRows[1]])}\n\n`;
+	const csvRows = parseCsvRows(source);
+	return csvRows ? `\n\n${formatMarkdownTable(csvRows)}\n\n` : source;
+}
+
+function normalizeEvidenceText(source) {
+	return source
+		.split(/\r?\n/)
+		.map((line) => {
+			const fields = line
+				.split(/\s+\|\s+/)
+				.map((field) => field.trim())
+				.filter(Boolean);
+			if (fields.length < 4) return line;
+			const groups = [];
+			let group = { marker: "", fields: [] };
+			for (const field of fields) {
+				if (/^[★☆]{1,3}$/.test(field)) {
+					if (group.fields.length) groups.push(group);
+					group = { marker: field, fields: [] };
+				} else group.fields.push(field);
+			}
+			if (group.fields.length) groups.push(group);
+			return groups
+				.map(({ marker, fields: groupFields }, groupIndex) => {
+					const title = groupFields.shift();
+					if (!title) return "";
+					const headingParts = [title];
+					if (marker && groupFields.length) headingParts.push(groupFields.shift());
+					const heading = marker
+						? `### ${marker} ${headingParts[0]}${headingParts[1] ? ` · ${headingParts[1]}` : ""}`
+						: `### ${headingParts[0]}`;
+					const entries = [heading];
+					for (const field of groupFields) {
+						if (/目视|十倍镜|AOI|显微镜|检验方式|检查方法/.test(field)) {
+							entries.push(`**检查方法：** ${field}`);
+							continue;
+						}
+						const matches = [...field.matchAll(/(?:^|\s)(\d+)\.(?!\d)\s*/g)];
+						if (matches.length) {
+							const prefix = field.slice(0, matches[0]?.index ?? 0).trim();
+							if (prefix) entries.push(`**控制要求：** ${prefix}`);
+							entries.push(
+								...matches.map((match, index) => {
+									const start = (match.index || 0) + match[0].length;
+									const end = matches[index + 1]?.index ?? field.length;
+									return `${match[1]}. ${field.slice(start, end).trim()}`;
+								}),
+							);
+							continue;
+						}
+						entries.push(groupIndex === 0 && !marker ? `**适用条件：** ${field}` : `- ${field}`);
+					}
+					return entries.join("\n");
+				})
+				.filter(Boolean)
+				.join("\n\n");
+		})
+		.join("\n");
+}
+
+function renderEvidenceCode(source, language) {
+	return renderCodeBlock({ lang: language, text: source });
+}
+
 function appendInline(parent, tokens, options = {}) {
 	for (const token of tokens || []) appendInlineToken(parent, token, options);
 }
@@ -118,8 +290,10 @@ function appendCitationText(parent, text) {
 		button.className = "citation-link";
 		button.dataset.evidenceId = match[1];
 		button.dataset.previewEvidence = "true";
-		button.setAttribute("aria-label", `预览引用材料 ${match[1]}`);
-		button.textContent = match[0];
+		const number = ++citationIndex;
+		button.title = `引用材料 ${number}：${match[1]}`;
+		button.setAttribute("aria-label", `预览引用材料 ${number}（${match[1]}）`);
+		button.textContent = String(number);
 		parent.appendChild(button);
 		cursor = index + match[0].length;
 	}
@@ -372,6 +546,7 @@ function appendBlock(parent, token) {
 function renderMarkdown(source) {
 	const container = document.createElement("div");
 	container.className = "md-body";
+	citationIndex = 0;
 
 	const text = String(source || "");
 	if (!window.marked) {
@@ -400,3 +575,23 @@ if (window.marked) {
 }
 
 window.renderMarkdown = renderMarkdown;
+window.renderEvidenceMarkdown = (source, title = "") => {
+	const text = String(source || "");
+	const fileName = String(title).split(/[?#]/, 1)[0].split(/[\\/]/).pop() || "";
+	const extension = /\.([^.]+)$/.exec(fileName)?.[1]?.toLowerCase() || "";
+	if (extension === "json") {
+		try {
+			return renderEvidenceCode(JSON.stringify(JSON.parse(text), null, 2), "json");
+		} catch {
+			return renderMarkdown(normalizeEvidenceTables(text));
+		}
+	}
+	if (["xml", "yaml", "yml", "log"].includes(extension)) return renderEvidenceCode(text, extension);
+	const normalized =
+		extension === "csv"
+			? normalizeEvidenceCsv(text)
+			: extension === "txt"
+				? normalizeEvidenceTables(normalizeEvidenceText(text))
+				: normalizeEvidenceTables(text);
+	return renderMarkdown(normalized);
+};

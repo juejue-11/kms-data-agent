@@ -9,21 +9,25 @@ const refreshSessionsBtn = document.getElementById("refresh-sessions-btn");
 const sessionTitle = document.getElementById("session-title");
 const runStatus = document.getElementById("run-status");
 const usageStatus = document.getElementById("usage-status");
+const usageDetails = document.getElementById("usage-details");
 const usageSummary = document.getElementById("usage-summary");
 const usageFields = {
 	input: document.getElementById("usage-input"),
 	output: document.getElementById("usage-output"),
 	cacheRead: document.getElementById("usage-cache-read"),
 	cacheWrite: document.getElementById("usage-cache-write"),
+	cacheRate: document.getElementById("usage-cache-rate"),
 	total: document.getElementById("usage-total"),
 	cost: document.getElementById("usage-cost"),
 	elapsed: document.getElementById("usage-elapsed"),
 	model: document.getElementById("usage-model"),
 };
+const USD_TO_CNY_REFERENCE_RATE = 7.2;
 const connectionDot = document.getElementById("connection-dot");
 const connectionTitle = document.getElementById("connection-title");
 const connectionDesc = document.getElementById("connection-desc");
 const composerRegion = document.getElementById("composer-region");
+let usagePointerInside = false;
 const deleteDialog = document.getElementById("session-delete-dialog");
 const deleteDialogMessage = document.getElementById("session-delete-message");
 const deleteCancelBtn = document.getElementById("session-delete-cancel");
@@ -287,7 +291,12 @@ async function openEvidencePreview(evidenceId) {
 		]
 			.filter(Boolean)
 			.join(" · ");
-		evidencePreviewText.textContent = typeof source.text === "string" ? source.text : "没有可展示的证据片段。";
+		evidencePreviewText.replaceChildren(
+			window.renderEvidenceMarkdown(
+				typeof source.text === "string" ? source.text : "没有可展示的证据片段。",
+				sourceTitle(source),
+			),
+		);
 		const url = typeof source.url === "string" && /^https?:\/\//i.test(source.url) ? source.url : "";
 		if (url) {
 			evidencePreviewLink.href = url;
@@ -318,25 +327,29 @@ function formatUsageCount(value) {
 
 function formatUsageCost(value) {
 	if (!Number.isFinite(value) || value < 0) return "—";
-	return `$${value.toFixed(6).replace(/0+$/, "").replace(/\.$/, "")}`;
+	return `￥${new Intl.NumberFormat("zh-CN", {
+		maximumSignificantDigits: 3,
+		useGrouping: false,
+	}).format(value * USD_TO_CNY_REFERENCE_RATE)}`;
 }
 
 function renderComposerUsage({ usage, model, elapsedMs, estimatedOutput, state: usageState = "idle" } = {}) {
 	usageStatus.dataset.state = usageState;
 	const hasUsage = isRecord(usage);
-	const hasCacheCounters = hasUsage && (Number(usage.cacheRead) > 0 || Number(usage.cacheWrite) > 0);
-	const promptTokens = hasUsage ? Number(usage.input) + Number(usage.cacheRead) + Number(usage.cacheWrite) : 0;
+	const hasCacheRead = hasUsage && Number.isFinite(usage.cacheRead) && usage.cacheRead >= 0;
+	const hasCacheWrite = hasUsage && Number.isFinite(usage.cacheWrite) && usage.cacheWrite >= 0;
+	const hasInput = hasUsage && Number.isFinite(usage.input) && usage.input >= 0;
+	const hasCacheCounters = hasCacheRead && hasCacheWrite;
+	const promptTokens = hasCacheCounters && hasInput ? usage.input + usage.cacheRead + usage.cacheWrite : 0;
 	const cacheRate =
-		hasCacheCounters && promptTokens > 0
-			? `${((Number(usage.cacheRead) / promptTokens) * 100).toFixed(1)}%`
-			: "缓存不可用";
+		hasCacheCounters && hasInput && promptTokens > 0
+			? `${((usage.cacheRead / promptTokens) * 100).toFixed(1)}%`
+			: "不可用";
 	const elapsed = Number.isFinite(elapsedMs) && elapsedMs >= 0 ? `${(elapsedMs / 1000).toFixed(1)} 秒` : "—";
 	if (usageState === "running") {
-		usageSummary.textContent = hasUsage
-			? `本轮 · 输入 ${formatUsageCount(usage.input)} · 输出 ${formatUsageCount(usage.output)} · 缓存命中 ${cacheRate} · ${formatUsageCost(usage.cost)} · ${elapsed}`
-			: `本轮 · 输出约 ${formatUsageCount(estimatedOutput)} token · ${elapsed}`;
+		usageSummary.textContent = `生成中 · ${elapsed}`;
 	} else if (hasUsage) {
-		usageSummary.textContent = `上轮 · 输入 ${formatUsageCount(usage.input)} / 输出 ${formatUsageCount(usage.output)} · 缓存命中 ${cacheRate} · ${formatUsageCost(usage.cost)} · ${elapsed}`;
+		usageSummary.textContent = `上轮 · ${formatUsageCount(usage.totalTokens)} token · ${formatUsageCost(usage.cost)} · ${elapsed}`;
 	} else {
 		usageSummary.textContent = "本轮用量";
 	}
@@ -346,8 +359,9 @@ function renderComposerUsage({ usage, model, elapsedMs, estimatedOutput, state: 
 		: usageState === "running"
 			? `约 ${formatUsageCount(estimatedOutput)}`
 			: "—";
-	usageFields.cacheRead.textContent = hasCacheCounters ? formatUsageCount(usage.cacheRead) : "不可用";
-	usageFields.cacheWrite.textContent = hasCacheCounters ? formatUsageCount(usage.cacheWrite) : "不可用";
+	usageFields.cacheRead.textContent = hasCacheRead ? formatUsageCount(usage.cacheRead) : "不可用";
+	usageFields.cacheWrite.textContent = hasCacheWrite ? formatUsageCount(usage.cacheWrite) : "不可用";
+	usageFields.cacheRate.textContent = cacheRate;
 	usageFields.total.textContent = hasUsage ? formatUsageCount(usage.totalTokens) : "—";
 	usageFields.cost.textContent = hasUsage ? formatUsageCost(usage.cost) : "—";
 	usageFields.elapsed.textContent = elapsed;
@@ -498,11 +512,14 @@ function renderFinal(request, final) {
 	const result = terminalResult(final) || asObject(final);
 	const reply = typeof result.reply === "string" ? result.reply : typeof result.text === "string" ? result.text : "";
 	const status = String(result.status || "");
-	const fallback = result.errorCode
-		? `请求状态：${status || "failed"}\n错误：${result.errorCode}`
-		: status
-			? `请求状态：${status}`
-			: "服务未返回回答。";
+	const fallback =
+		result.errorCode === "MODEL_CONNECTION_ERROR"
+			? "模型服务连接失败，请检查本机网络或代理设置后重试。"
+			: result.errorCode
+				? `请求状态：${status || "failed"}\n错误：${result.errorCode}`
+				: status
+					? `请求状态：${status}`
+					: "服务未返回回答。";
 	updateAssistant(request.assistant, reply || fallback, {
 		citationValidation: result.citationValidation,
 		status,
@@ -1065,6 +1082,29 @@ refreshSessionsBtn.addEventListener("click", () => {
 });
 sendBtn.addEventListener("click", () => void sendMessage());
 stopBtn.addEventListener("click", () => void stopMessage());
+
+usageDetails.addEventListener("pointerenter", (event) => {
+	if (event.pointerType !== "mouse") return;
+	usagePointerInside = true;
+	usageDetails.open = true;
+});
+usageDetails.addEventListener("pointerleave", (event) => {
+	if (event.pointerType !== "mouse") return;
+	usagePointerInside = false;
+	if (!usageDetails.contains(document.activeElement)) usageDetails.open = false;
+});
+usageDetails.addEventListener("focusin", () => {
+	usageDetails.open = true;
+});
+usageDetails.addEventListener("focusout", (event) => {
+	if (!usagePointerInside && !usageDetails.contains(event.relatedTarget)) usageDetails.open = false;
+});
+usageDetails.addEventListener("keydown", (event) => {
+	if (event.key === "Escape") usageDetails.open = false;
+});
+usageSummary.addEventListener("click", (event) => {
+	if (usagePointerInside) event.preventDefault();
+});
 
 chatBox.addEventListener("scroll", updateFollowState, { passive: true });
 chatBox.addEventListener("wheel", releaseFollowOnUserInput, { passive: true });

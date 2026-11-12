@@ -89,7 +89,7 @@
                     <textarea id="user-input" rows="1" aria-label="描述 PCB 异常现象" placeholder="描述你遇到的 PCB 异常现象…"></textarea>
                     <div class="composer-toolbar">
                         <div id="usage-status" class="composer-usage" data-state="idle" role="status" aria-live="polite">
-                            <details class="composer-usage-details">
+                            <details id="usage-details" class="composer-usage-details">
                                 <summary id="usage-summary">本轮用量</summary>
                                 <div class="composer-usage-popover">
                                     <dl>
@@ -97,11 +97,13 @@
                                         <div><dt>输出 token</dt><dd id="usage-output">—</dd></div>
                                         <div><dt>缓存读取</dt><dd id="usage-cache-read">—</dd></div>
                                         <div><dt>缓存写入</dt><dd id="usage-cache-write">—</dd></div>
+                                        <div><dt>缓存命中率</dt><dd id="usage-cache-rate">—</dd></div>
                                         <div><dt>总 token</dt><dd id="usage-total">—</dd></div>
-                                        <div><dt>费用</dt><dd id="usage-cost">—</dd></div>
+                                        <div><dt>估算费用</dt><dd id="usage-cost">—</dd></div>
                                         <div><dt>耗时</dt><dd id="usage-elapsed">—</dd></div>
                                         <div><dt>模型</dt><dd id="usage-model">—</dd></div>
                                     </dl>
+                                    <p class="composer-usage-note">按模型目录美元单价及参考汇率 1 USD = 7.2 CNY 折算</p>
                                 </div>
                             </details>
                         </div>

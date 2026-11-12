@@ -57,6 +57,14 @@ export interface Submission {
 	start?: () => void;
 	subscribe?: (listener: (event: BusinessEvent) => void) => () => void;
 }
+function modelFailureCode(errorMessage: unknown): string {
+	const message = typeof errorMessage === "string" ? errorMessage : "";
+	return /connection error|fetch failed|network error|ECONN(?:REFUSED|RESET|TIMEDOUT)|ETIMEDOUT|ENOTFOUND|EAI_AGAIN/i.test(
+		message,
+	)
+		? "MODEL_CONNECTION_ERROR"
+		: "MODEL_ERROR";
+}
 // 业务服务负责把持久化会话、Pi 分支和 HTTP 层请求状态编排在一起。
 export class AgentService {
 	readonly store: SessionStore;
@@ -577,7 +585,9 @@ export class AgentService {
 							? "cancelled"
 							: "failed";
 				if (run.metadata.status !== "succeeded")
-					run.metadata.errorCode = run.stopCode ?? (reason === "length" ? "OUTPUT_LIMIT" : "MODEL_ERROR");
+					run.metadata.errorCode =
+						run.stopCode ??
+						(reason === "length" ? "OUTPUT_LIMIT" : modelFailureCode(answer.message.errorMessage));
 			} else {
 				run.metadata.status =
 					run.stopCode === "REQUEST_CANCELLED" ||
@@ -594,7 +604,13 @@ export class AgentService {
 				run.stopCode === "SESSION_DELETED"
 					? "cancelled"
 					: "failed";
-			run.metadata.errorCode = run.stopCode ?? (error instanceof AppError ? error.code : "AGENT_ERROR");
+			run.metadata.errorCode =
+				run.stopCode ??
+				(error instanceof AppError
+					? error.code
+					: error instanceof Error
+						? modelFailureCode(error.message)
+						: "AGENT_ERROR");
 			if (live) {
 				await live.session.abort().catch(() => {});
 				const branch = live.manager.getBranch();

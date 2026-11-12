@@ -221,6 +221,24 @@ test("session title validation trims Unicode and enforces the 100 code point lim
 	}
 });
 
+test("model connection failures return an actionable error code", async () => {
+	const env = await setup();
+	try {
+		const { sessionId } = env.service.create("connection-owner");
+		env.harness.setResponses([fauxAssistantMessage("", { stopReason: "error", errorMessage: "Connection error." })]);
+		const result = await finish(
+			env.service.submit("connection-owner", sessionId, {
+				requestId: randomUUID(),
+				message: "测试模型连接",
+			}),
+		);
+		assert.equal(result.status, "failed");
+		assert.equal(result.errorCode, "MODEL_CONNECTION_ERROR");
+	} finally {
+		await env.cleanup();
+	}
+});
+
 test("manual rename during execution remains after the stale execution metadata is persisted", async () => {
 	const env = await setup();
 	try {
