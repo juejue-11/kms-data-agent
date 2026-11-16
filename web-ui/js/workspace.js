@@ -71,7 +71,7 @@
 			this.chat.querySelector(".welcome")?.remove();
 		}
 
-		renderSessions(sessions, selectedId, busy) {
+		renderSessions(sessions, selectedId, busy, running = new Set()) {
 			this.closeMenu();
 			this.list.replaceChildren();
 			if (!sessions.length) {
@@ -107,12 +107,12 @@
 				heading.className = "session-group-heading";
 				heading.textContent = label;
 				group.appendChild(heading);
-				for (const session of entries) group.appendChild(this.sessionItem(session, selectedId, busy, label));
+				for (const session of entries) group.appendChild(this.sessionItem(session, selectedId, busy, label, running));
 				this.list.appendChild(group);
 			}
 		}
 
-		sessionItem(session, selectedId, busy, group) {
+		sessionItem(session, selectedId, busy, group, running) {
 			const titleText = this.handlers.sessionTitle(session);
 			const item = document.createElement("div");
 			item.className = `session-item${session.sessionId === selectedId ? " active" : ""}`;
@@ -135,6 +135,13 @@
 						minute: "2-digit",
 						hour12: false,
 					});
+			// 后台仍有请求在跑时给出标记，避免切走后误以为会话已结束。
+			if (running.has(session.sessionId)) {
+				const runningFlag = document.createElement("span");
+				runningFlag.className = "session-item-running";
+				runningFlag.textContent = "生成中";
+				meta.appendChild(runningFlag);
+			}
 			select.appendChild(title);
 			select.appendChild(meta);
 			select.addEventListener("click", () => {

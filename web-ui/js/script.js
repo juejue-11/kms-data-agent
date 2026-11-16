@@ -1,4 +1,5 @@
-// PCB 会话页面控制器：维护会话列表、消息 DOM 与当前请求，并把断流恢复限制在原会话视图内。
+// PCB 会话页面控制器：维护会话列表与消息 DOM。
+// 进行中的请求记录在页面级 runs 表中，切换会话只解绑渲染，不中断后台生成。
 const api = new window.PcbApi();
 const sendBtn = document.getElementById("send-btn");
 const stopBtn = document.getElementById("stop-btn");
@@ -55,6 +56,8 @@ const state = {
 	sessionId: null,
 	sessions: [],
 	viewGeneration: 0,
+	// runs 以 sessionId 为键保存本页面所有进行中的请求，activeRequest 只是其中绑定到当前视图的那个。
+	runs: new Map(),
 	activeRequest: null,
 	loadingSession: false,
 	creatingSession: false,
@@ -164,12 +167,13 @@ function setSending(sending) {
 }
 
 function currentRequest(request) {
-	// 会话切换会递增 generation；三重校验会丢弃旧请求迟到的事件、响应和定时器回调。
-	return (
-		state.activeRequest === request &&
-		request.generation === state.viewGeneration &&
-		request.sessionId === state.sessionId
-	);
+	// 后台请求仍然存活，因此这里不再校验视图代次；DOM 更新由 isVisibleRequest 单独把关。
+	return state.runs.get(request.sessionId) === request;
+}
+
+function isVisibleRequest(request) {
+	// 同一时刻只有一个会话的 DOM 可见；其余会话的请求继续累积文本，切回时再补渲染。
+	return state.activeRequest === request && request.sessionId === state.sessionId;
 }
 
 function clearChat() {
@@ -387,9 +391,11 @@ function stopUsageClock(request) {
 }
 
 function startUsageClock(request) {
+	// 重复绑定同一请求时先清掉旧计时器，避免切回会话后出现多个计时循环。
+	stopUsageClock(request);
 	renderRequestUsage(request);
 	request.usageClock = setInterval(() => {
-		if (currentRequest(request)) renderRequestUsage(request);
+		if (isVisibleRequest(request)) renderRequestUsage(request);
 	}, 1000);
 }
 
@@ -461,6 +467,34 @@ function updateAssistant(message, text, { citationValidation, status } = {}) {
 	scrollToLatest();
 }
 
+function findRequestMessage(requestId, className) {
+	// 请求 ID 只用于精确定位气泡，避免切回会话时重复插入同一条消息。
+	for (const node of chatBox.querySelectorAll(`.message.${className}`)) {
+		if (node.dataset.requestId === requestId) return node;
+	}
+	return null;
+}
+
+function messageHandle(wrap) {
+	return { wrap, bubble: wrap.querySelector(".bubble"), textNode: wrap.querySelector(".msg-text") };
+}
+
+function renderLiveRequest(request) {
+	// 历史已经落盘的部分直接复用；只补齐缺失的用户气泡并重建助手气泡。
+	workspace.hideWelcome();
+	if (!findRequestMessage(request.requestId, "user-message") && request.messageText) {
+		// 受理后尚未落盘的短暂窗口里，历史中的用户消息可能还没有 requestId。
+		const lastUser = Array.from(chatBox.querySelectorAll(".message.user-message")).at(-1);
+		if (lastUser && !lastUser.dataset.requestId && lastUser.querySelector(".msg-text")?.textContent === request.messageText)
+			lastUser.dataset.requestId = request.requestId;
+		else addMessage(request.messageText, "user-message", { requestId: request.requestId });
+	}
+	let assistant = findRequestMessage(request.requestId, "ai-message");
+	if (!assistant) assistant = addMessage("", "ai-message", { requestId: request.requestId }).wrap;
+	request.assistant = messageHandle(assistant);
+	updateAssistant(request.assistant, request.streamedText);
+}
+
 function renderHistory(messages) {
 	clearChat();
 	if (!Array.isArray(messages) || !messages.length) {
@@ -479,7 +513,8 @@ function renderHistory(messages) {
 			entryId: message.entryId,
 			requestId: message.requestId,
 			citationValidation: message.citationValidation,
-			status: message.status,
+			// 请求状态只属于助手回答；挂到用户消息上会留下永久的“未完成: running”标签。
+			status: role === "assistant" ? message.status : undefined,
 		});
 		if (role === "assistant" && isRecord(message.usage)) latestUsage = message;
 	}
@@ -555,11 +590,19 @@ function scheduleReconcile(request) {
 }
 
 function finishRequest(request, final) {
+	// 后台请求结束时只更新列表，页面停留在别的会话时不能写它的 DOM。
 	if (!currentRequest(request)) return;
 	clearReconcileTimer(request);
-	renderFinal(request, final);
-	state.activeRequest = null;
-	setSending(false);
+	stopUsageClock(request);
+	state.runs.delete(request.sessionId);
+	const visible = isVisibleRequest(request);
+	if (state.activeRequest === request) state.activeRequest = null;
+	if (visible) {
+		// 切回会话时历史渲染可能给用户消息带过“未完成”标签，结束时要一并清掉。
+		findRequestMessage(request.requestId, "user-message")?.querySelector(".message-status")?.remove();
+		renderFinal(request, final);
+		setSending(false);
+	}
 	void refreshSessions({ preserveSelection: true });
 }
 
@@ -575,18 +618,20 @@ async function reconcileRequest(request) {
 			return;
 		}
 		request.connectionLost = true;
-		setRunStatus("请求仍在服务端运行，可停止或稍后刷新状态");
-		setSending(true);
+		if (isVisibleRequest(request)) {
+			setRunStatus("请求仍在服务端运行，可停止或稍后刷新状态");
+			setSending(true);
+		}
 		scheduleReconcile(request);
 	} catch (error) {
 		if (!currentRequest(request)) return;
 		request.connectionLost = true;
-		setRunStatus(error.message || "无法查询请求状态", true);
+		if (isVisibleRequest(request)) setRunStatus(error.message || "无法查询请求状态", true);
 		if (error?.status) {
 			finishRequest(request, { status: "failed", reply: error.message, errorCode: error.code, sources: [] });
 			return;
 		}
-		setSending(true);
+		if (isVisibleRequest(request)) setSending(true);
 		scheduleReconcile(request);
 	}
 }
@@ -638,11 +683,11 @@ function refreshSessionTitleAfterAcceptedRequest(request) {
 }
 
 async function sendMessage() {
-	// 一个页面请求从生成 requestId 到终态渲染都绑定同一 generation，保证切换会话后旧流不能污染新页面。
+	// 同一会话同时只允许一个请求；其他会话的运行不阻塞当前会话输入。
 	const text = userInput.value.trim();
 	if (
 		!text ||
-		state.activeRequest ||
+		(state.sessionId && state.runs.has(state.sessionId)) ||
 		state.loadingSession ||
 		state.creatingSession ||
 		(state.deletingSessionId && state.deletingSessionId === state.sessionId)
@@ -661,15 +706,12 @@ async function sendMessage() {
 		}
 	}
 
-	const generation = state.viewGeneration;
 	const requestId = makeRequestId();
-	addMessage(text, "user-message", { requestId });
-	const assistant = addMessage("", "ai-message", { requestId });
 	const request = {
 		sessionId,
 		requestId,
-		generation,
-		assistant,
+		messageText: text,
+		assistant: undefined,
 		streamedText: "",
 		completedText: "",
 		startedAt: Date.now(),
@@ -679,11 +721,17 @@ async function sendMessage() {
 		cancelling: false,
 		connectionLost: false,
 	};
-	setActiveRequest(request);
-	startUsageClock(request);
+	state.runs.set(sessionId, request);
+	// 只有目标会话仍是当前视图时才写 DOM；否则请求静默在后台执行。
+	if (state.sessionId === sessionId) {
+		setActiveRequest(request);
+		addMessage(text, "user-message", { requestId });
+		request.assistant = addMessage("", "ai-message", { requestId });
+		startUsageClock(request);
+		setRunStatus("正在请求模型…");
+	}
 	userInput.value = "";
 	resizeUserInput();
-	setRunStatus("正在请求模型…");
 	try {
 		const result = await api.sendMessage(sessionId, {
 			requestId,
@@ -691,29 +739,35 @@ async function sendMessage() {
 			signal: request.controller.signal,
 			onEvent: (event) => {
 				if (!currentRequest(request)) return;
-				workspace.updateKnowledge(event);
+				// 侧栏标题和知识库状态属于页面级信息，后台请求也要更新标题。
 				if (["request_started", "message_delta", "message_completed", "request_finished"].includes(event?.type))
 					refreshSessionTitleAfterAcceptedRequest(request);
+				const visible = isVisibleRequest(request);
+				if (visible) workspace.updateKnowledge(event);
 				const status = eventStatus(event);
-				if (status) setRunStatus(status);
+				if (status && visible) setRunStatus(status);
 				if (event?.type === "message_delta") {
 					const delta = typeof asObject(event.payload).delta === "string" ? event.payload.delta : "";
 					request.streamedText += delta;
-					updateAssistant(request.assistant, request.streamedText);
-					renderRequestUsage(request);
+					if (visible) {
+						updateAssistant(request.assistant, request.streamedText);
+						renderRequestUsage(request);
+					}
 				} else if (event?.type === "usage_snapshot") {
 					const payload = asObject(event.payload);
 					if (isRecord(payload.usage)) request.usageSnapshot = payload.usage;
 					if (typeof payload.model === "string") request.model = payload.model;
-					renderRequestUsage(request);
+					if (visible) renderRequestUsage(request);
 				} else if (event?.type === "message_completed") {
 					const payload = asObject(event.payload);
 					const completed = typeof payload.text === "string" ? payload.text : messageContent(payload);
 					if (completed) {
 						request.completedText = completed;
 						request.streamedText = completed;
-						updateAssistant(request.assistant, completed);
-						renderRequestUsage(request);
+						if (visible) {
+							updateAssistant(request.assistant, completed);
+							renderRequestUsage(request);
+						}
 						request.streamedText = "";
 					}
 				} else if (event?.type === "request_finished") {
@@ -725,7 +779,7 @@ async function sendMessage() {
 		if (!currentRequest(request)) return;
 		if (result.kind === "status") {
 			refreshSessionTitleAfterAcceptedRequest(request);
-			setRunStatus("请求已在服务端运行，未重复提交");
+			if (isVisibleRequest(request)) setRunStatus("请求已在服务端运行，未重复提交");
 			await reconcileRequest(request);
 			return;
 		}
@@ -743,7 +797,7 @@ async function sendMessage() {
 			finishRequest(request, { status: "failed", reply: error.message, errorCode: error.code, sources: [] });
 			return;
 		}
-		setRunStatus("连接中断，正在查询请求状态…", true);
+		if (isVisibleRequest(request)) setRunStatus("连接中断，正在查询请求状态…", true);
 		await reconcileRequest(request);
 	}
 }
@@ -783,40 +837,57 @@ async function stopMessage() {
 		if (final || isTerminal(response)) finishRequest(request, final || response);
 		else {
 			request.cancelling = false;
-			setSending(true);
+			if (isVisibleRequest(request)) {
+				setSending(true);
+				setRunStatus("已发送停止请求，等待服务端确认");
+			}
 			scheduleReconcile(request);
-			setRunStatus("已发送停止请求，等待服务端确认");
 		}
 	} catch (error) {
 		if (!currentRequest(request)) return;
 		request.cancelling = false;
-		setSending(true);
-		setRunStatus(error.message || "停止请求失败", true);
+		if (isVisibleRequest(request)) {
+			setSending(true);
+			setRunStatus(error.message || "停止请求失败", true);
+		}
 	}
 }
 
 function renderSessionList() {
+	// 本地运行表提供即时状态，会话列表里的 running 覆盖其他标签页发起的请求。
+	const running = new Set(state.runs.keys());
+	for (const session of state.sessions) {
+		if (session.status === "running") running.add(session.sessionId);
+	}
 	workspace.renderSessions(
 		state.sessions,
 		state.sessionId,
 		Boolean(state.deletingSessionId || state.renamingSessionId),
+		running,
 	);
 }
-function invalidateActiveRequest() {
-	const previous = state.activeRequest;
-	if (previous) {
-		clearReconcileTimer(previous);
-		stopUsageClock(previous);
-		previous.controller.abort();
-	}
+
+function detachActiveRequest() {
+	// 只解除视图绑定：后台请求继续流式接收并累积文本，切回时再恢复渲染。
 	state.activeRequest = null;
 	setSending(false);
+}
+
+function abortRun(sessionId) {
+	// 会话被删除时本地流必须立即断开，否则删除完成后仍会有迟到事件写回页面。
+	const request = state.runs.get(sessionId);
+	if (!request) return;
+	state.runs.delete(sessionId);
+	clearReconcileTimer(request);
+	stopUsageClock(request);
+	request.controller.abort();
+	if (state.activeRequest === request) detachActiveRequest();
 }
 
 function showEmptySession() {
 	// 删除最后一个会话或首次打开空列表时只准备空白页面，发送消息前再创建后端会话。
 	state.viewGeneration += 1;
-	invalidateActiveRequest();
+	detachActiveRequest();
 	closeEvidencePreview();
 	state.sessionId = null;
 	safeStorageRemove(SELECTED_SESSION_KEY);
@@ -862,7 +933,8 @@ async function createSession() {
 	state.loadingSession = true;
 	try {
 		state.viewGeneration += 1;
-		invalidateActiveRequest();
+		// 新建会话只切换视图，其他会话仍在后台生成。
+		detachActiveRequest();
 		closeEvidencePreview();
 		const created = await api.createSession();
 		if (!created.sessionId) throw new Error("服务未返回会话 ID");
@@ -882,10 +954,10 @@ async function createSession() {
 
 async function selectSession(sessionId) {
 	if (!sessionId) return;
-	// 先使旧视图失效并中止其控制器，再加载新会话；旧请求即使随后回调也会被 currentRequest 拦截。
+	// 切换会话只解绑旧视图，不断开旧请求的流；旧请求在后台继续累积回答。
 	const generation = state.viewGeneration + 1;
 	state.viewGeneration = generation;
-	invalidateActiveRequest();
+	detachActiveRequest();
 	closeEvidencePreview();
 	state.sessionId = sessionId;
 	safeStorageSet(SELECTED_SESSION_KEY, sessionId);
@@ -909,13 +981,14 @@ async function selectSession(sessionId) {
 				: sessionDisplayTitle(session);
 		renderHistory(history.messages);
 		setConnection(true, "会话已恢复");
-		const activeRequestId = session.activeRequestId;
-		if (activeRequestId) {
-			const request = {
+		// 本页面仍在接收的流优先；否则按服务端的活动请求重建轮询。
+		let live = state.runs.get(sessionId);
+		if (!live && session.activeRequestId) {
+			live = {
 				sessionId,
-				requestId: activeRequestId,
-				generation,
-				assistant: addMessage("", "ai-message", { requestId: activeRequestId }),
+				requestId: session.activeRequestId,
+				messageText: "",
+				assistant: undefined,
 				streamedText: "",
 				completedText: "",
 				startedAt: Date.now(),
@@ -925,11 +998,14 @@ async function selectSession(sessionId) {
 				cancelling: false,
 				connectionLost: true,
 			};
-			state.activeRequest = request;
-			startUsageClock(request);
-			setSending(true);
-			setRunStatus("会话中有运行中的请求，正在查询状态…");
-			await reconcileRequest(request);
+			state.runs.set(sessionId, live);
+		}
+		if (live) {
+			setActiveRequest(live);
+			renderLiveRequest(live);
+			startUsageClock(live);
+			setRunStatus(live.connectionLost ? "会话中有运行中的请求，正在查询状态…" : "正在生成回答…");
+			if (live.connectionLost) await reconcileRequest(live);
 		} else setRunStatus("");
 		renderSessionList();
 	} catch (error) {
@@ -1027,10 +1103,10 @@ async function confirmDeleteSession() {
 async function deleteSession(sessionId) {
 	if (!sessionId || state.deletingSessionId) return false;
 	const wasCurrent = state.sessionId === sessionId;
+	// 删除接口会在服务端取消请求；本地无论是否可见都要断开该会话的流，避免迟到事件写回页面。
+	abortRun(sessionId);
 	if (wasCurrent) {
-		// 删除接口会等待并取消服务端请求；这里先停止本地流，避免删除后的迟到事件写回页面。
 		state.viewGeneration += 1;
-		invalidateActiveRequest();
 		state.loadingSession = false;
 	}
 	state.deletingSessionId = sessionId;

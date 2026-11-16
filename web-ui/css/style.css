@@ -395,6 +395,35 @@ select:focus-visible,
     white-space: nowrap;
 }
 
+/* 后台仍在生成回答的会话标记，与时间并列显示。 */
+.session-item-running {
+    margin-left: 6px;
+    color: var(--gold-500);
+    font-weight: 600;
+}
+
+.session-item-running::before {
+    display: inline-block;
+    width: 5px;
+    height: 5px;
+    margin-right: 4px;
+    border-radius: 50%;
+    background: var(--gold-500);
+    content: "";
+    animation: session-running-pulse 1.2s ease-in-out infinite;
+}
+
+@keyframes session-running-pulse {
+    0%,
+    100% {
+        opacity: 0.35;
+    }
+
+    50% {
+        opacity: 1;
+    }
+}
+
 .session-item-actions {
     position: relative;
     display: flex;
